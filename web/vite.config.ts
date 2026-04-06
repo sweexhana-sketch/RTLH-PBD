@@ -66,6 +66,14 @@ export default defineConfig({
     aliases(),
     layoutWrapperPlugin(),
   ],
+  build: {
+    target: 'esnext',
+  },
+  esbuild: {
+    supported: {
+      'top-level-await': true,
+    },
+  },
   resolve: {
     alias: {
       lodash: 'lodash-es',

@@ -4,6 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "react-router dev",
+		"build": "react-router build",
 		"typecheck": "react-router typegen && tsc --noEmit"
 	},
 	"dependencies": {
@@ -94,6 +95,8 @@
 		"vitest": "^3.2.4"
 	},
 	"overrides": {
-		"next-themes": "^0.3.0"
+		"next-themes": "^0.3.0",
+		"@types/react": "18.3.1",
+		"@types/react-dom": "18.3.1"
 	}
 }
