@@ -293,10 +293,23 @@ app.use('/api/auth/*', async (c, next) => {
 });
 app.route(API_BASENAME, api);
 
-const server = await createHonoServer({
-  app,
-  defaultLogger: false,
-});
+// @ts-expect-error - virtual module
+import * as serverBuild from 'virtual:react-router/server-build';
+import { createRequestHandler } from 'react-router';
+
+let server;
+
+if (process.env.NODE_ENV === 'development') {
+  server = await createHonoServer({
+    app,
+    defaultLogger: false,
+  });
+} else {
+  app.all('*', async (c) => {
+    const requestHandler = createRequestHandler(serverBuild, 'production');
+    return await requestHandler(c.req.raw);
+  });
+}
 
 export { app };
 export default server;
