@@ -1,21 +1,28 @@
-import { useIdleTimer } from 'react-idle-timer';
+import { useEffect } from 'react';
 
 export function useDevServerHeartbeat() {
-  useIdleTimer({
-    disabled: typeof window === 'undefined',
-    throttle: 60_000 * 3,
-    timeout: 60_000,
-    onAction: () => {
-      // HACK: at time of writing, we run the dev server on a proxy url that
-      // when requested, ensures that the dev server's life is extended. If
-      // the user is using a page or is active in it in the app, but when the
-      // user has popped out their preview, they no longer can rely on the
-      // app to do this. This hook ensures it stays alive.
-      fetch('/', {
-        method: 'GET',
-      }).catch((error) => {
-        // this is a no-op, we just want to keep the dev server alive
-      });
-    },
-  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!import.meta.env.DEV) return;
+
+    let lastAction = Date.now();
+    const handleAction = () => { lastAction = Date.now(); };
+    window.addEventListener('mousemove', handleAction, { passive: true });
+    window.addEventListener('keydown', handleAction, { passive: true });
+    window.addEventListener('scroll', handleAction, { passive: true });
+
+    const interval = setInterval(() => {
+      // Only keep the server alive if the user has been active recently
+      if (Date.now() - lastAction < 60_000 * 3) {
+        fetch('/', { method: 'GET' }).catch(() => {});
+      }
+    }, 60_000);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('mousemove', handleAction);
+      window.removeEventListener('keydown', handleAction);
+      window.removeEventListener('scroll', handleAction);
+    };
+  }, []);
 }
