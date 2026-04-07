@@ -65,68 +65,69 @@ function getHonoPath(routeFile: string): { name: string; pattern: string }[] {
 
 // Import and register all routes
 async function registerRoutes() {
-  const routeFiles = (
-    await findRouteFiles(__dirname).catch((error) => {
-      console.error('Error finding route files:', error);
-      return [];
-    })
-  )
-    .slice()
-    .sort((a, b) => {
-      return b.length - a.length;
-    });
-
-  // Clear existing routes
   api.routes = [];
 
-  for (const routeFile of routeFiles) {
-    try {
-      const route = await import(/* @vite-ignore */ `${routeFile}?update=${Date.now()}`);
+  if (import.meta.env.PROD) {
+    const routeModules = import.meta.glob('../src/app/api/**/route.js', { eager: true });
+    for (const [routeFile, routeExports] of Object.entries(routeModules)) {
+      const relativePath = routeFile.replace('../src/app/api', '');
+      const parts = relativePath.split('/').filter(Boolean);
+      const routeParts = parts.slice(0, -1);
+      
+      const transformedParts = routeParts.length === 0 
+        ? [{ name: 'root', pattern: '' }] 
+        : routeParts.map((segment) => {
+            const match = segment.match(/^\[(\.{3})?([^\]]+)\]$/);
+            if (match) {
+              const [_, dots, param] = match;
+              return dots === '...'
+                ? { name: param, pattern: `:${param}{.+}` }
+                : { name: param, pattern: `:${param}` };
+            }
+            return { name: segment, pattern: segment };
+          });
+          
+      const honoPath = `/${transformedParts.map(({ pattern }) => pattern).join('/')}`;
+      const route: any = routeExports;
+      
+      for (const method of ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']) {
+        if (route[method]) {
+          const handler: Handler = async (c) => {
+            const params = c.req.param();
+            return await route[method](c.req.raw, { params });
+          };
+          const methodLowercase = method.toLowerCase();
+          (api as any)[methodLowercase](honoPath, handler);
+        }
+      }
+    }
+  } else {
+    // Development logic
+    const routeFiles = (
+      await findRouteFiles(__dirname).catch((error) => {
+        console.error('Error finding route files:', error);
+        return [];
+      })
+    ).slice().sort((a, b) => b.length - a.length);
 
-      const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'];
-      for (const method of methods) {
-        try {
+    for (const routeFile of routeFiles) {
+      try {
+        const route = await import(/* @vite-ignore */ `${routeFile}?update=${Date.now()}`);
+        for (const method of ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']) {
           if (route[method]) {
             const parts = getHonoPath(routeFile);
             const honoPath = `/${parts.map(({ pattern }) => pattern).join('/')}`;
             const handler: Handler = async (c) => {
               const params = c.req.param();
-              if (import.meta.env.DEV) {
-                const updatedRoute = await import(
-                  /* @vite-ignore */ `${routeFile}?update=${Date.now()}`
-                );
-                return await updatedRoute[method](c.req.raw, { params });
-              }
-              return await route[method](c.req.raw, { params });
+              const updatedRoute = await import(/* @vite-ignore */ `${routeFile}?update=${Date.now()}`);
+              return await updatedRoute[method](c.req.raw, { params });
             };
-            const methodLowercase = method.toLowerCase();
-            switch (methodLowercase) {
-              case 'get':
-                api.get(honoPath, handler);
-                break;
-              case 'post':
-                api.post(honoPath, handler);
-                break;
-              case 'put':
-                api.put(honoPath, handler);
-                break;
-              case 'delete':
-                api.delete(honoPath, handler);
-                break;
-              case 'patch':
-                api.patch(honoPath, handler);
-                break;
-              default:
-                console.warn(`Unsupported method: ${method}`);
-                break;
-            }
+            (api as any)[method.toLowerCase()](honoPath, handler);
           }
-        } catch (error) {
-          console.error(`Error registering route ${routeFile} for method ${method}:`, error);
         }
+      } catch (error) {
+        console.error(`Error importing route file ${routeFile}:`, error);
       }
-    } catch (error) {
-      console.error(`Error importing route file ${routeFile}:`, error);
     }
   }
 }

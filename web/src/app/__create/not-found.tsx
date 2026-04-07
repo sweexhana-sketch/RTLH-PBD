@@ -4,7 +4,24 @@ import { useNavigate } from 'react-router';
 import { useCallback, useEffect, useState } from 'react';
 
 export async function loader({ params }: Route.LoaderArgs) {
-  const matches = await fg('src/**/page.{js,jsx,ts,tsx}');
+  let matches: string[] = [];
+  
+  if (process.env.NODE_ENV === 'development') {
+    // Only run fast-glob in development to prevent Serverless hanging
+    matches = await fg('src/**/page.{js,jsx,ts,tsx}');
+  } else {
+    // Hardcode known routes for production to prevent 504 Gateway Timeout
+    matches = [
+      'src/app/page.jsx',
+      'src/app/data/page.jsx',
+      'src/app/analysis/page.jsx',
+      'src/app/sync/page.jsx',
+      'src/app/penerima/page.jsx',
+      'src/app/penerima/analisis/page.jsx',
+      'src/app/penerima/tambah/page.jsx',
+    ];
+  }
+
   return {
     path: `/${params['*']}`,
     pages: matches

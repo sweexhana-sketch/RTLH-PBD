@@ -112,8 +112,25 @@ if (import.meta.env.DEV) {
 		});
 	}
 }
-const tree = buildRouteTree(__dirname);
-const notFound = route('*?', './__create/not-found.tsx');
-const routes = [...generateRoutes(tree), notFound];
 
-export default routes;
+// In production, we cannot rely on readdirSync since the server bundle flattens directories
+let finalRoutes: RouteConfigEntry[] = [];
+
+if (process.env.NODE_ENV === 'production' || import.meta.env?.PROD) {
+	finalRoutes = [
+		index('./page.jsx'),
+		route('sync', './sync/page.jsx'),
+		route('data', './data/page.jsx'),
+		route('analysis', './analysis/page.jsx'),
+		route('penerima', './penerima/page.jsx'),
+		route('penerima/tambah', './penerima/tambah/page.jsx'),
+		route('penerima/analisis', './penerima/analisis/page.jsx'),
+		route('__create/social-dev-shim', './__create/social-dev-shim/page.jsx'),
+		route('*?', './__create/not-found.tsx')
+	];
+} else {
+	const tree = buildRouteTree(__dirname);
+	finalRoutes = [...generateRoutes(tree), route('*?', './__create/not-found.tsx')];
+}
+
+export default finalRoutes;;
