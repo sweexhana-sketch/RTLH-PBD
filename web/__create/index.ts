@@ -2,7 +2,7 @@ import { skipCSRFCheck } from '@auth/core';
 import Credentials from '@auth/core/providers/credentials';
 import { authHandler, initAuthConfig } from '@hono/auth-js';
 import { neon } from '@neondatabase/serverless';
-import { hash, verify } from 'argon2';
+import bcrypt from 'bcryptjs';
 import { Hono } from 'hono';
 import { env } from 'hono/adapter';
 import { cors } from 'hono/cors';
@@ -67,10 +67,21 @@ let _adapter: any = null;
 
 const getDb = () => {
   if (!_db) {
-    log('Initializing Database HTTP Client (Neon)...');
+    log('Initializing Database HTTP Client (Neon) with 10s guard...');
     const dbUrl = getStaticEnv('DATABASE_URL');
     if (!dbUrl) log('WARNING: DATABASE_URL is missing.');
-    _db = neon(dbUrl || '');
+    const rawClient = neon(dbUrl || '');
+
+    // Universal DB Proxy with 10s timeout to protect Auth and App
+    _db = async (strings: any, ...values: any[]) => {
+      const queryTimeout = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('DATABASE_TIMEOUT: Query took longer than 10s')), 10000);
+      });
+      return Promise.race([
+        rawClient(strings, ...values),
+        queryTimeout
+      ]);
+    };
   }
   return _db;
 };
@@ -94,9 +105,26 @@ criticalEnvVars.forEach((varName) => {
 
 const app = new Hono();
 
-// Asset Guard: Immediately handle common static requests that should not hit React Router
+// Asset Guard: Immediately handle common static requests
 app.all('/favicon.ico', (c) => c.text('Not Found', 404));
 app.all('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /', 200));
+
+// --- GLOBAL CIRCUIT BREAKER (15s) ---
+app.use('*', async (c, next) => {
+  // Bypasses
+  if (c.req.path === '/health' || c.req.path === '/favicon.ico') return next();
+
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error('GLOBAL_TIMEOUT: Process took longer than 15s')), 15000);
+  });
+
+  try {
+    await Promise.race([next(), timeoutPromise]);
+  } catch (err: any) {
+    log(`GLOBAL TIMEOUT/ERROR caught: ${err.message || err}`);
+    return c.html(getHTMLForErrorPage(err), 500);
+  }
+});
 
 // Health check endpoint
 app.get('/health', (c) => c.text('OK', 200));
@@ -106,19 +134,12 @@ app.get('/api/diag', async (c) => {
   const runtimeKeys = Object.keys(env(c) || {});
   const processKeys = (typeof process !== 'undefined' && process.env) ? Object.keys(process.env) : [];
   
-  const timeoutPromise = new Promise((_, reject) => {
-    setTimeout(() => reject(new Error('DIAGNOSTIC_TIMEOUT: DB check took longer than 15s')), 15000);
-  });
-
   let dbStatus = 'untested';
   try {
     const db = getDb();
     const start = Date.now();
-    // HTTP driver uses the client as a function
-    await Promise.race([
-      db('SELECT 1'),
-      timeoutPromise
-    ]);
+    // HTTP driver uses the client as a function (now guarded by getDb proxy)
+    await db('SELECT 1');
     dbStatus = `connected (HTTP, ${Date.now() - start}ms)`;
   } catch (e: any) {
     dbStatus = `error: ${e.message}`;
@@ -307,7 +328,7 @@ if (getStaticEnv('AUTH_SECRET')) {
               return null;
             }
 
-            const isValid = await verify(accountPassword, password);
+            const isValid = await bcrypt.compare(password, accountPassword);
             if (!isValid) {
               return null;
             }
@@ -352,7 +373,7 @@ if (getStaticEnv('AUTH_SECRET')) {
               });
               await adapter.linkAccount({
                 extraData: {
-                  password: await hash(password),
+                  password: await bcrypt.hash(password, 10),
                 },
                 type: 'credentials',
                 userId: newUser.id,
@@ -422,43 +443,28 @@ if (!isProd) {
   
   app.all('*', async (c) => {
     const requestId = Math.random().toString(36).substring(7);
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('DIAGNOSTIC_TIMEOUT: Request took longer than 15s')), 15000);
-    });
 
-    try {
-      if (!cachedRequestHandler) {
-        log(`[${requestId}] Lazy initializing React Router request handler...`);
-        const start = Date.now();
-        cachedRequestHandler = createRequestHandler(serverBuild, 'production');
-        log(`[${requestId}] React Router request handler created in ${Date.now() - start}ms.`);
-      }
-
-      // Fix for "Invalid URL" error: Ensure incoming request has an absolute URL
-      let request = c.req.raw;
-      try {
-        new URL(request.url);
-      } catch (e) {
-        const url = new URL(c.req.path, getStaticEnv('VERCEL_URL') ? `https://${getStaticEnv('VERCEL_URL')}` : 'http://localhost');
-        request = new Request(url.toString(), request);
-      }
-
-      const requestStart = Date.now();
-      log(`[${requestId}] Entering React Router handler for ${c.req.path}`);
-      
-      // Use Promise.race to enforce a timeout
-      const response = await Promise.race([
-        cachedRequestHandler(request),
-        timeoutPromise
-      ]);
-      
-      log(`[${requestId}] Leaving React Router handler after ${Date.now() - requestStart}ms.`);
-      return response as Response;
-    } catch (handlerErr: any) {
-      const isTimeout = handlerErr.message?.includes('DIAGNOSTIC_TIMEOUT');
-      log(`[${requestId}] Request ${isTimeout ? 'TIMED OUT' : 'FAILED'}: ${handlerErr instanceof Error ? handlerErr.stack : handlerErr}`);
-      return c.html(getHTMLForErrorPage(handlerErr as any), 500);
+    if (!cachedRequestHandler) {
+      log(`[${requestId}] Lazy initializing React Router request handler...`);
+      const start = Date.now();
+      cachedRequestHandler = createRequestHandler(serverBuild, 'production');
+      log(`[${requestId}] React Router request handler created in ${Date.now() - start}ms.`);
     }
+
+    // Fix for "Invalid URL" error: Ensure incoming request has an absolute URL
+    let request = c.req.raw;
+    try {
+      new URL(request.url);
+    } catch (e) {
+      const url = new URL(c.req.path, getStaticEnv('VERCEL_URL') ? `https://${getStaticEnv('VERCEL_URL')}` : 'http://localhost');
+      request = new Request(url.toString(), request);
+    }
+
+    const requestStart = Date.now();
+    log(`[${requestId}] Entering React Router handler for ${c.req.path}`);
+    const response = await cachedRequestHandler(request);
+    log(`[${requestId}] Leaving React Router handler after ${Date.now() - requestStart}ms.`);
+    return response as Response;
   });
 }
 
