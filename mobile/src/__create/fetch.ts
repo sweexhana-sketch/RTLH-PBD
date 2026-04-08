@@ -77,7 +77,7 @@ const fetchToWeb = async function fetchWithHeaders(...args: Params) {
   }
 
   const auth = await SecureStore.getItemAsync(authKey)
-    .then((auth) => {
+    .then((auth: string | null) => {
       return auth ? JSON.parse(auth) : null;
     })
     .catch(() => {

@@ -24,5 +24,6 @@
 		"paths": {
 			"@/*": ["./src/*"]
 		}
-	}
+	},
+	"exclude": ["../mobile", "node_modules", "build"]
 }

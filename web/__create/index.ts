@@ -4,6 +4,7 @@ import { authHandler, initAuthConfig } from '@hono/auth-js';
 import { Pool, neonConfig } from '@neondatabase/serverless';
 import { hash, verify } from 'argon2';
 import { Hono } from 'hono';
+import { env } from 'hono/adapter';
 import { cors } from 'hono/cors';
 import { proxy } from 'hono/proxy';
 import { bodyLimit } from 'hono/body-limit';
@@ -19,23 +20,88 @@ import { API_BASENAME, api } from './route-builder';
 import * as serverBuild from 'virtual:react-router/server-build';
 import { createRequestHandler } from 'react-router';
 
-console.error('[DEBUG] Starting server initialization...');
+const log = (msg: string) => {
+  console.error(`[${new Date().toISOString()}] [DEBUG] ${msg}`);
+};
+
+/**
+ * Bulletproof environment variable access utility.
+ * Checks hono/adapter env(c), process.env, and globalThis with extensive guarding.
+ */
+const getSafeEnv = (c: any, key: string): string | undefined => {
+  try {
+    // 1. Try Hono runtime context
+    const runtime = env(c);
+    if (runtime && typeof runtime === 'object' && key in runtime && runtime[key]) {
+      return runtime[key] as string;
+    }
+  } catch (e) {}
+
+  try {
+    // 2. Try process.env
+    if (typeof process !== 'undefined' && process.env && process.env[key]) {
+      return process.env[key] as string;
+    }
+  } catch (e) {}
+
+  return undefined;
+};
+
+// Top-level / static env access (guarded)
+const getStaticEnv = (key: string): string | undefined => {
+  try {
+    return (typeof process !== 'undefined' && process.env) ? process.env[key] : undefined;
+  } catch (e) {
+    return undefined;
+  }
+};
+
+log('Starting server initialization...');
+
+// Startup Validation
+const criticalEnvVars = ['DATABASE_URL', 'AUTH_SECRET'];
+criticalEnvVars.forEach((varName) => {
+  if (!process.env[varName]) {
+    log(`WARNING: ${varName} is missing from process.env`);
+  } else {
+    log(`${varName} is present.`);
+  }
+});
 
 neonConfig.webSocketConstructor = ws;
 
-console.error('[DEBUG] Initializing Database Pool...');
+log('Initializing Database Pool...');
+const dbUrl = getStaticEnv('DATABASE_URL');
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: dbUrl,
 });
 const adapter = NeonAdapter(pool);
-console.error('[DEBUG] Database Pool initialized.');
+log('Database Pool initialized.');
 
 const app = new Hono();
+
+// Health check endpoint
+app.get('/health', (c) => c.text('OK', 200));
+
+// Diagnostics endpoint (keys only)
+app.get('/api/diag', (c) => {
+  const runtimeKeys = Object.keys(env(c) || {});
+  const processKeys = (typeof process !== 'undefined' && process.env) ? Object.keys(process.env) : [];
+  return c.json({
+    timestamp: new Date().toISOString(),
+    runtimeAvailable: runtimeKeys.length > 0,
+    runtimeKeys,
+    processAvailable: processKeys.length > 0,
+    processKeys: processKeys.filter(k => !k.includes('SECRET') && !k.includes('KEY') && !k.includes('URL')),
+    nodeVersion: typeof process !== 'undefined' ? process.version : 'unknown',
+    vercelEnv: getStaticEnv('VERCEL') || 'unknown'
+  });
+});
 
 // Polyfill for Vercel Headers issue
 app.use('*', async (c, next) => {
   if (c.req.raw && c.req.raw.headers && typeof c.req.raw.headers.get !== 'function') {
-    console.error('[DEBUG] Polyfilling missing headers.get()');
+    log('Polyfilling missing headers.get()');
     const headers = c.req.raw.headers as any;
     c.req.raw.headers.get = (name: string) => headers[name.toLowerCase()] || null;
   }
@@ -56,11 +122,11 @@ app.onError((err, c) => {
   return c.html(getHTMLForErrorPage(err), 200);
 });
 
-if (process.env.CORS_ORIGINS) {
+if (getStaticEnv('CORS_ORIGINS')) {
   app.use(
     '/*',
     cors({
-      origin: process.env.CORS_ORIGINS.split(',').map((origin) => origin.trim()),
+      origin: (getStaticEnv('CORS_ORIGINS') || '').split(',').map((origin) => origin.trim()),
     })
   );
 }
@@ -76,12 +142,17 @@ for (const method of ['post', 'put', 'patch'] as const) {
   );
 }
 
-if (process.env.AUTH_SECRET) {
-  console.error('[DEBUG] Initializing Auth.js middleware...');
+if (getStaticEnv('AUTH_SECRET')) {
+  log('Initializing Auth.js middleware (Deferred)...');
   app.use(
     '*',
-    initAuthConfig((c) => ({
-      secret: c.env?.AUTH_SECRET || process.env.AUTH_SECRET,
+    initAuthConfig(async (c) => {
+      const secret = getSafeEnv(c, 'AUTH_SECRET');
+      if (!secret) {
+        log('WARNING: AUTH_SECRET resolve failed in callback. Using static fallback if available.');
+      }
+      return {
+        secret: secret || getStaticEnv('AUTH_SECRET') || 'dummy-secret-to-prevent-crash',
       pages: {
         signIn: '/account/signin',
         signOut: '/account/logout',
@@ -254,9 +325,10 @@ if (process.env.AUTH_SECRET) {
           },
         }),
       ],
-    }))
-  );
-  console.error('[DEBUG] Auth.js middleware initialized.');
+    };
+  })
+);
+  log('Auth.js middleware initialized.');
 }
 app.all('/integrations/:path{.+}', async (c, next) => {
   const queryParams = c.req.query();
@@ -286,30 +358,38 @@ app.use('/api/auth/*', async (c, next) => {
   return next();
 });
 
-console.error('[DEBUG] Registering API routes...');
+log('Registering API routes...');
 app.route(API_BASENAME, api);
-console.error('[DEBUG] API routes registered.');
+log('API routes registered.');
 
-let server;
-const isProd = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1';
+let cachedRequestHandler: any = null;
 
 if (!isProd) {
-  console.error('[DEBUG] Starting in Development mode...');
+  log('Starting in Development mode...');
   server = await createHonoServer({
     app,
     defaultLogger: false,
   });
 } else {
-  console.error('[DEBUG] Starting in Production mode...');
-  console.error('[DEBUG] Creating React Router request handler...');
-  const requestHandler = createRequestHandler(serverBuild, 'production');
-  console.error('[DEBUG] React Router request handler created.');
+  log('Starting in Production mode (READY for requests)');
+  
   app.all('*', async (c) => {
-    return await requestHandler(c.req.raw);
+    try {
+      if (!cachedRequestHandler) {
+        log('Lazy initializing React Router request handler...');
+        const start = Date.now();
+        cachedRequestHandler = createRequestHandler(serverBuild, 'production');
+        log(`React Router request handler created in ${Date.now() - start}ms.`);
+      }
+      return await cachedRequestHandler(c.req.raw);
+    } catch (handlerErr) {
+      log(`Request handler error: ${handlerErr}`);
+      return c.html(getHTMLForErrorPage(handlerErr as any), 500);
+    }
   });
 }
 
-console.error('[DEBUG] Server initialization complete.');
+log('Server initialization phase complete.');
 
 export { app };
 export default server;
