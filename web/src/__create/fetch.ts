@@ -65,9 +65,11 @@ export const fetchWithHeaders = async (
   };
 
   const isExternalFetch = !isFirstPartyURL(url) && !isSecondPartyUrl(url);
+  const isNeonQuery = url.includes('neon.tech');
+
   // we should not add headers to requests that don't go to our own server
-  // or if it's an API request
-  if (isExternalFetch || url.startsWith('/api')) {
+  // or if it's an API request, or if it's a Neon DB query
+  if (isExternalFetch || url.startsWith('/api') || isNeonQuery) {
     return originalFetch(input, init);
   }
 

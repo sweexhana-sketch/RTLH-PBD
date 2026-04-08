@@ -106,12 +106,19 @@ app.get('/api/diag', async (c) => {
   const runtimeKeys = Object.keys(env(c) || {});
   const processKeys = (typeof process !== 'undefined' && process.env) ? Object.keys(process.env) : [];
   
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error('DIAGNOSTIC_TIMEOUT: DB check took longer than 15s')), 15000);
+  });
+
   let dbStatus = 'untested';
   try {
     const db = getDb();
     const start = Date.now();
     // HTTP driver uses the client as a function
-    await db('SELECT 1');
+    await Promise.race([
+      db('SELECT 1'),
+      timeoutPromise
+    ]);
     dbStatus = `connected (HTTP, ${Date.now() - start}ms)`;
   } catch (e: any) {
     dbStatus = `error: ${e.message}`;
