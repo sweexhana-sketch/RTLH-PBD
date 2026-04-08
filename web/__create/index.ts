@@ -14,7 +14,7 @@ import ws from 'ws';
 import NeonAdapter from './adapter';
 import { getHTMLForErrorPage } from './get-html-for-error-page';
 import { isAuthAction } from './is-auth-action';
-import { API_BASENAME, api } from './route-builder';
+import { API_BASENAME, api, ensureRoutesRegistered } from './route-builder';
 
 // @ts-expect-error - virtual module
 import * as serverBuild from 'virtual:react-router/server-build';
@@ -58,7 +58,7 @@ const getStaticEnv = (key: string): string | undefined => {
 
 log('Starting server initialization...');
 
-const isProd = import.meta.env.PROD || getStaticEnv('NODE_ENV') === 'production' || getStaticEnv('VERCEL') === '1' || process.env.NODE_ENV === 'production';
+const isProd = (import.meta as any).env?.PROD || getStaticEnv('NODE_ENV') === 'production' || getStaticEnv('VERCEL') === '1' || process.env.NODE_ENV === 'production';
 
 const criticalEnvVars = ['DATABASE_URL', 'AUTH_SECRET'];
 
@@ -102,15 +102,25 @@ app.all('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /', 200));
 app.get('/health', (c) => c.text('OK', 200));
 
 // Diagnostics endpoint (keys only)
-app.get('/api/diag', (c) => {
+app.get('/api/diag', async (c) => {
   const runtimeKeys = Object.keys(env(c) || {});
   const processKeys = (typeof process !== 'undefined' && process.env) ? Object.keys(process.env) : [];
+  
+  let dbStatus = 'untested';
+  try {
+    const db = getDb();
+    const start = Date.now();
+    await db.query('SELECT 1');
+    dbStatus = `connected (${Date.now() - start}ms)`;
+  } catch (e: any) {
+    dbStatus = `error: ${e.message}`;
+  }
+
   return c.json({
     timestamp: new Date().toISOString(),
+    dbStatus,
     runtimeAvailable: runtimeKeys.length > 0,
-    runtimeKeys,
     processAvailable: processKeys.length > 0,
-    processKeys: processKeys.filter(k => !k.includes('SECRET') && !k.includes('KEY') && !k.includes('URL')),
     nodeVersion: typeof process !== 'undefined' ? process.version : 'unknown',
     vercelEnv: getStaticEnv('VERCEL') || 'unknown'
   });
@@ -165,6 +175,7 @@ if (getStaticEnv('AUTH_SECRET')) {
   app.use(
     '*',
     initAuthConfig(async (c) => {
+      log('Auth.js: Resolving config callback...');
       const secret = getSafeEnv(c, 'AUTH_SECRET');
       if (!secret) {
         log('WARNING: AUTH_SECRET resolve failed in callback. Using static fallback if available.');
@@ -281,7 +292,7 @@ if (getStaticEnv('AUTH_SECRET')) {
               return null;
             }
             const matchingAccount = user.accounts.find(
-              (account) => account.provider === 'credentials'
+              (account: any) => account.provider === 'credentials'
             );
             const accountPassword = matchingAccount?.password;
             if (!accountPassword) {
@@ -380,7 +391,6 @@ app.use('/api/auth/*', async (c, next) => {
 });
 
 log('Registering API routes (Lazy Entry)...');
-import { ensureRoutesRegistered } from './route-builder';
 
 app.use(API_BASENAME + '/*', async (c, next) => {
   await ensureRoutesRegistered();
@@ -404,6 +414,10 @@ if (!isProd) {
   
   app.all('*', async (c) => {
     const requestId = Math.random().toString(36).substring(7);
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('DIAGNOSTIC_TIMEOUT: Request took longer than 15s')), 15000);
+    });
+
     try {
       if (!cachedRequestHandler) {
         log(`[${requestId}] Lazy initializing React Router request handler...`);
@@ -423,11 +437,18 @@ if (!isProd) {
 
       const requestStart = Date.now();
       log(`[${requestId}] Entering React Router handler for ${c.req.path}`);
-      const response = await cachedRequestHandler(request);
+      
+      // Use Promise.race to enforce a timeout
+      const response = await Promise.race([
+        cachedRequestHandler(request),
+        timeoutPromise
+      ]);
+      
       log(`[${requestId}] Leaving React Router handler after ${Date.now() - requestStart}ms.`);
-      return response;
-    } catch (handlerErr) {
-      log(`[${requestId}] Request handler error: ${handlerErr instanceof Error ? handlerErr.stack : handlerErr}`);
+      return response as Response;
+    } catch (handlerErr: any) {
+      const isTimeout = handlerErr.message?.includes('DIAGNOSTIC_TIMEOUT');
+      log(`[${requestId}] Request ${isTimeout ? 'TIMED OUT' : 'FAILED'}: ${handlerErr instanceof Error ? handlerErr.stack : handlerErr}`);
       return c.html(getHTMLForErrorPage(handlerErr as any), 500);
     }
   });
