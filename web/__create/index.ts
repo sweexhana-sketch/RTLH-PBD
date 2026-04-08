@@ -58,7 +58,7 @@ const getStaticEnv = (key: string): string | undefined => {
 
 log('Starting server initialization...');
 
-const isProd = getStaticEnv('NODE_ENV') === 'production' || getStaticEnv('VERCEL') === '1' || process.env.NODE_ENV === 'production';
+const isProd = import.meta.env.PROD || getStaticEnv('NODE_ENV') === 'production' || getStaticEnv('VERCEL') === '1' || process.env.NODE_ENV === 'production';
 
 const criticalEnvVars = ['DATABASE_URL', 'AUTH_SECRET'];
 
@@ -93,6 +93,10 @@ criticalEnvVars.forEach((varName) => {
 neonConfig.webSocketConstructor = ws;
 
 const app = new Hono();
+
+// Asset Guard: Immediately handle common static requests that should not hit React Router
+app.all('/favicon.ico', (c) => c.text('Not Found', 404));
+app.all('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /', 200));
 
 // Health check endpoint
 app.get('/health', (c) => c.text('OK', 200));
@@ -375,9 +379,16 @@ app.use('/api/auth/*', async (c, next) => {
   return next();
 });
 
-log('Registering API routes...');
+log('Registering API routes (Lazy Entry)...');
+import { ensureRoutesRegistered } from './route-builder';
+
+app.use(API_BASENAME + '/*', async (c, next) => {
+  await ensureRoutesRegistered();
+  return next();
+});
+
 app.route(API_BASENAME, api);
-log('API routes registered.');
+log('API router attached.');
 
 let server;
 let cachedRequestHandler: any = null;
@@ -392,12 +403,13 @@ if (!isProd) {
   log('Starting in Production mode (READY for requests)');
   
   app.all('*', async (c) => {
+    const requestId = Math.random().toString(36).substring(7);
     try {
       if (!cachedRequestHandler) {
-        log('Lazy initializing React Router request handler...');
+        log(`[${requestId}] Lazy initializing React Router request handler...`);
         const start = Date.now();
         cachedRequestHandler = createRequestHandler(serverBuild, 'production');
-        log(`React Router request handler created in ${Date.now() - start}ms.`);
+        log(`[${requestId}] React Router request handler created in ${Date.now() - start}ms.`);
       }
 
       // Fix for "Invalid URL" error: Ensure incoming request has an absolute URL
@@ -409,9 +421,13 @@ if (!isProd) {
         request = new Request(url.toString(), request);
       }
 
-      return await cachedRequestHandler(request);
+      const requestStart = Date.now();
+      log(`[${requestId}] Entering React Router handler for ${c.req.path}`);
+      const response = await cachedRequestHandler(request);
+      log(`[${requestId}] Leaving React Router handler after ${Date.now() - requestStart}ms.`);
+      return response;
     } catch (handlerErr) {
-      log(`Request handler error: ${handlerErr instanceof Error ? handlerErr.stack : handlerErr}`);
+      log(`[${requestId}] Request handler error: ${handlerErr instanceof Error ? handlerErr.stack : handlerErr}`);
       return c.html(getHTMLForErrorPage(handlerErr as any), 500);
     }
   });

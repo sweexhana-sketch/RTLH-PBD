@@ -141,10 +141,19 @@ async function registerRoutes() {
   }
 }
 
-console.log('[DEBUG] route-builder: Initializing top-level registerRoutes await...');
-// Initial route registration
-await registerRoutes();
-console.log('[DEBUG] route-builder: Top-level registerRoutes await complete.');
+let registrationPromise: Promise<void> | null = null;
+
+async function ensureRoutesRegistered() {
+  if (registrationPromise) {
+    return registrationPromise;
+  }
+  registrationPromise = registerRoutes().catch((err) => {
+    console.error('[DEBUG] registerRoutes critical failure:', err);
+    registrationPromise = null; // Allow retry on next request if it failed
+    throw err;
+  });
+  return registrationPromise;
+}
 
 // Hot reload routes in development
 if (!isVercel && (import.meta as any).env?.DEV) {
@@ -160,4 +169,4 @@ if (!isVercel && (import.meta as any).env?.DEV) {
   }
 }
 
-export { api, API_BASENAME };
+export { api, API_BASENAME, ensureRoutesRegistered };
