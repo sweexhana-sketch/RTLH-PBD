@@ -58,25 +58,39 @@ const getStaticEnv = (key: string): string | undefined => {
 
 log('Starting server initialization...');
 
-// Startup Validation
+const isProd = getStaticEnv('NODE_ENV') === 'production' || getStaticEnv('VERCEL') === '1' || process.env.NODE_ENV === 'production';
+
 const criticalEnvVars = ['DATABASE_URL', 'AUTH_SECRET'];
+
+let _pool: Pool | null = null;
+let _adapter: any = null;
+
+const getDb = () => {
+  if (!_pool) {
+    log('Initializing Database Pool (Lazy)...');
+    const dbUrl = getStaticEnv('DATABASE_URL');
+    if (!dbUrl) log('WARNING: DATABASE_URL is missing.');
+    _pool = new Pool({ connectionString: dbUrl });
+  }
+  return _pool;
+};
+
+const getAdapter = () => {
+  if (!_adapter) {
+    _adapter = NeonAdapter(getDb());
+  }
+  return _adapter;
+};
+
+// Log environment state ONLY once
+log(`Starting server initialization in ${isProd ? 'Production' : 'Development'} mode...`);
 criticalEnvVars.forEach((varName) => {
   if (!process.env[varName]) {
     log(`WARNING: ${varName} is missing from process.env`);
-  } else {
-    log(`${varName} is present.`);
   }
 });
 
 neonConfig.webSocketConstructor = ws;
-
-log('Initializing Database Pool...');
-const dbUrl = getStaticEnv('DATABASE_URL');
-const pool = new Pool({
-  connectionString: dbUrl,
-});
-const adapter = NeonAdapter(pool);
-log('Database Pool initialized.');
 
 const app = new Hono();
 
@@ -206,6 +220,7 @@ if (getStaticEnv('AUTH_SECRET')) {
                   const { email, name, provider } = credentials;
                   if (!email || typeof email !== 'string') return null;
 
+                  const adapter = getAdapter();
                   const existing = await adapter.getUserByEmail(email);
                   if (existing) return existing;
 
@@ -255,6 +270,7 @@ if (getStaticEnv('AUTH_SECRET')) {
               return null;
             }
 
+            const adapter = getAdapter();
             // logic to verify if user exists
             const user = await adapter.getUserByEmail(email);
             if (!user) {
@@ -301,6 +317,7 @@ if (getStaticEnv('AUTH_SECRET')) {
               return null;
             }
 
+            const adapter = getAdapter();
             // logic to verify if user exists
             const user = await adapter.getUserByEmail(email);
             if (!user) {
@@ -363,7 +380,6 @@ app.route(API_BASENAME, api);
 log('API routes registered.');
 
 let server;
-const isProd = getStaticEnv('NODE_ENV') === 'production' || getStaticEnv('VERCEL') === '1' || process.env.NODE_ENV === 'production';
 let cachedRequestHandler: any = null;
 
 if (!isProd) {
@@ -383,9 +399,19 @@ if (!isProd) {
         cachedRequestHandler = createRequestHandler(serverBuild, 'production');
         log(`React Router request handler created in ${Date.now() - start}ms.`);
       }
-      return await cachedRequestHandler(c.req.raw);
+
+      // Fix for "Invalid URL" error: Ensure incoming request has an absolute URL
+      let request = c.req.raw;
+      try {
+        new URL(request.url);
+      } catch (e) {
+        const url = new URL(c.req.path, getStaticEnv('VERCEL_URL') ? `https://${getStaticEnv('VERCEL_URL')}` : 'http://localhost');
+        request = new Request(url.toString(), request);
+      }
+
+      return await cachedRequestHandler(request);
     } catch (handlerErr) {
-      log(`Request handler error: ${handlerErr}`);
+      log(`Request handler error: ${handlerErr instanceof Error ? handlerErr.stack : handlerErr}`);
       return c.html(getHTMLForErrorPage(handlerErr as any), 500);
     }
   });

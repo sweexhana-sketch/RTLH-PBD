@@ -8,13 +8,14 @@ import updatedFetch from '../src/__create/fetch';
 const API_BASENAME = '/api';
 const api = new Hono();
 
-// Get current directory
-const __dirname = join(fileURLToPath(new URL('.', import.meta.url)), '../src/app/api');
+const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production' || (import.meta as any).env?.PROD;
+const API_ROOT_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '../src/app/api');
+
 if (globalThis.fetch) {
   globalThis.fetch = updatedFetch;
 }
 
-// Recursively find all route.js files
+// Recursively find all route.js files (Development only)
 async function findRouteFiles(dir: string): Promise<string[]> {
   const files = await readdir(dir);
   let routes: string[] = [];
@@ -27,9 +28,8 @@ async function findRouteFiles(dir: string): Promise<string[]> {
       if (statResult.isDirectory()) {
         routes = routes.concat(await findRouteFiles(filePath));
       } else if (file === 'route.js') {
-        // Handle root route.js specially
-        if (filePath === join(__dirname, 'route.js')) {
-          routes.unshift(filePath); // Add to beginning of array
+        if (filePath === join(API_ROOT_DIR, 'route.js')) {
+          routes.unshift(filePath);
         } else {
           routes.push(filePath);
         }
@@ -42,15 +42,15 @@ async function findRouteFiles(dir: string): Promise<string[]> {
   return routes;
 }
 
-// Helper function to transform file path to Hono route path
+// Helper function to transform file path into Hono route path (Development only)
 function getHonoPath(routeFile: string): { name: string; pattern: string }[] {
-  const relativePath = routeFile.replace(__dirname, '');
+  const relativePath = routeFile.replace(API_ROOT_DIR, '');
   const parts = relativePath.split('/').filter(Boolean);
-  const routeParts = parts.slice(0, -1); // Remove 'route.js'
+  const routeParts = parts.slice(0, -1);
   if (routeParts.length === 0) {
     return [{ name: 'root', pattern: '' }];
   }
-  const transformedParts = routeParts.map((segment) => {
+  return routeParts.map((segment) => {
     const match = segment.match(/^\[(\.{3})?([^\]]+)\]$/);
     if (match) {
       const [_, dots, param] = match;
@@ -60,10 +60,8 @@ function getHonoPath(routeFile: string): { name: string; pattern: string }[] {
     }
     return { name: segment, pattern: segment };
   });
-  return transformedParts;
 }
 
-const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production' || (import.meta as any).env?.PROD;
 
 // Import and register all routes
 async function registerRoutes() {
@@ -113,7 +111,7 @@ async function registerRoutes() {
     console.log('[DEBUG] registerRoutes: Detected Development. Scanning API routes via readdir...');
     // Development logic - only run if NOT on Vercel
     const routeFiles = (
-      await findRouteFiles(__dirname).catch((error) => {
+      await findRouteFiles(API_ROOT_DIR).catch((error) => {
         console.error('Error finding route files:', error);
         return [];
       })
