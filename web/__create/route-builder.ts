@@ -73,9 +73,9 @@ async function registerRoutes() {
   if (isVercel) {
     console.log('[DEBUG] registerRoutes: Detected Production/Vercel. Scanning API routes via glob...');
     // In production/Vercel, we MUST use static analysis (glob)
-    const routeModules = (import.meta as any).glob('../src/app/api/**/route.js', { eager: true });
+    const routeModules = (import.meta as any).glob('../src/app/api/**/route.js');
     console.log(`[DEBUG] registerRoutes: Found ${Object.keys(routeModules).length} API route modules.`);
-    for (const [routeFile, routeExports] of Object.entries(routeModules)) {
+    for (const [routeFile, importRoute] of Object.entries(routeModules)) {
       const relativePath = routeFile.replace('../src/app/api', '');
       const parts = relativePath.split('/').filter(Boolean);
       const routeParts = parts.slice(0, -1);
@@ -94,17 +94,18 @@ async function registerRoutes() {
           });
           
       const honoPath = `/${transformedParts.map(({ pattern }) => pattern).join('/')}`;
-      const route: any = routeExports;
       
       for (const method of ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']) {
-        if (route[method]) {
-          const handler: Handler = async (c) => {
+        const handler: Handler = async (c) => {
+          const route: any = await (importRoute as any)();
+          if (route[method]) {
             const params = c.req.param();
             return await route[method](c.req.raw, { params });
-          };
-          const methodLowercase = method.toLowerCase();
-          (api as any)[methodLowercase](honoPath, handler);
-        }
+          }
+          return c.text('Method Not Allowed', 405);
+        };
+        const methodLowercase = method.toLowerCase();
+        (api as any)[methodLowercase](honoPath, handler);
       }
     }
     console.log('[DEBUG] registerRoutes: Production API route registration complete.');
