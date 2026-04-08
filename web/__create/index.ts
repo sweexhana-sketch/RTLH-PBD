@@ -21,12 +21,16 @@ import { API_BASENAME, api } from './route-builder';
 import * as serverBuild from 'virtual:react-router/server-build';
 import { createRequestHandler } from 'react-router';
 
+console.log('[DEBUG] Starting server initialization...');
+
 neonConfig.webSocketConstructor = ws;
 
+console.log('[DEBUG] Initializing Database Pool...');
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 const adapter = NeonAdapter(pool);
+console.log('[DEBUG] Database Pool initialized.');
 
 const app = new Hono();
 
@@ -34,6 +38,7 @@ app.use('*', requestId());
 app.use(contextStorage());
 
 app.onError((err, c) => {
+  console.error('[DEBUG] Hono Error:', err);
   if (c.req.method !== 'GET') {
     return c.json(
       {
@@ -67,6 +72,7 @@ for (const method of ['post', 'put', 'patch'] as const) {
 }
 
 if (process.env.AUTH_SECRET) {
+  console.log('[DEBUG] Initializing Auth.js middleware...');
   app.use(
     '*',
     initAuthConfig((c) => ({
@@ -245,6 +251,7 @@ if (process.env.AUTH_SECRET) {
       ],
     }))
   );
+  console.log('[DEBUG] Auth.js middleware initialized.');
 }
 app.all('/integrations/:path{.+}', async (c, next) => {
   const queryParams = c.req.query();
@@ -274,22 +281,30 @@ app.use('/api/auth/*', async (c, next) => {
   return next();
 });
 
+console.log('[DEBUG] Registering API routes...');
 app.route(API_BASENAME, api);
+console.log('[DEBUG] API routes registered.');
 
 let server;
 const isProd = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1';
 
 if (!isProd) {
+  console.log('[DEBUG] Starting in Development mode...');
   server = await createHonoServer({
     app,
     defaultLogger: false,
   });
 } else {
+  console.log('[DEBUG] Starting in Production mode...');
+  console.log('[DEBUG] Creating React Router request handler...');
   const requestHandler = createRequestHandler(serverBuild, 'production');
+  console.log('[DEBUG] React Router request handler created.');
   app.all('*', async (c) => {
     return await requestHandler(c.req.raw);
   });
 }
+
+console.log('[DEBUG] Server initialization complete.');
 
 export { app };
 export default server;

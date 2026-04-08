@@ -67,11 +67,14 @@ const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'product
 
 // Import and register all routes
 async function registerRoutes() {
+  console.log('[DEBUG] registerRoutes: Starting...');
   api.routes = [];
 
   if (isVercel) {
+    console.log('[DEBUG] registerRoutes: Detected Production/Vercel. Scanning API routes via glob...');
     // In production/Vercel, we MUST use static analysis (glob)
     const routeModules = (import.meta as any).glob('../src/app/api/**/route.js', { eager: true });
+    console.log(`[DEBUG] registerRoutes: Found ${Object.keys(routeModules).length} API route modules.`);
     for (const [routeFile, routeExports] of Object.entries(routeModules)) {
       const relativePath = routeFile.replace('../src/app/api', '');
       const parts = relativePath.split('/').filter(Boolean);
@@ -104,7 +107,9 @@ async function registerRoutes() {
         }
       }
     }
+    console.log('[DEBUG] registerRoutes: Production API route registration complete.');
   } else {
+    console.log('[DEBUG] registerRoutes: Detected Development. Scanning API routes via readdir...');
     // Development logic - only run if NOT on Vercel
     const routeFiles = (
       await findRouteFiles(__dirname).catch((error) => {
@@ -113,6 +118,7 @@ async function registerRoutes() {
       })
     ).slice().sort((a, b) => b.length - a.length);
 
+    console.log(`[DEBUG] registerRoutes: Found ${routeFiles.length} API route files.`);
     for (const routeFile of routeFiles) {
       try {
         const route = await import(/* @vite-ignore */ `${routeFile}?update=${Date.now()}`);
@@ -132,11 +138,14 @@ async function registerRoutes() {
         console.error(`Error importing route file ${routeFile}:`, error);
       }
     }
+    console.log('[DEBUG] registerRoutes: Development API route registration complete.');
   }
 }
 
+console.log('[DEBUG] route-builder: Initializing top-level registerRoutes await...');
 // Initial route registration
 await registerRoutes();
+console.log('[DEBUG] route-builder: Top-level registerRoutes await complete.');
 
 // Hot reload routes in development
 if (!isVercel && (import.meta as any).env?.DEV) {
