@@ -362,6 +362,8 @@ log('Registering API routes...');
 app.route(API_BASENAME, api);
 log('API routes registered.');
 
+let server;
+const isProd = getStaticEnv('NODE_ENV') === 'production' || getStaticEnv('VERCEL') === '1';
 let cachedRequestHandler: any = null;
 
 if (!isProd) {
