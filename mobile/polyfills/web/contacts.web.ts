@@ -1,8 +1,11 @@
+// @ts-ignore
 import type { ExistingContact, ContactQuery } from 'expo-contacts';
+// @ts-ignore
 import { Fields, SortTypes } from 'expo-contacts/src/Contacts';
 import Alert from './alerts.web';
+// @ts-ignore
 import * as Notifications from 'expo-contacts';
-const { PermissionStatus } = Notifications;
+const { PermissionStatus } = Notifications as any;
 
 export { PermissionStatus, Fields, SortTypes };
 

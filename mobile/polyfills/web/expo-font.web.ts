@@ -1,4 +1,6 @@
+// @ts-ignore
 export * from 'expo-font';
+// @ts-ignore
 export { useFonts } from 'expo-font';
 
 export async function renderToImageAsync(): Promise<{

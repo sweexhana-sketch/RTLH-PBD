@@ -1,6 +1,6 @@
 import lodash from 'lodash';
 const { partial } = lodash;
-import regularStripe from 'npm:stripe';
+import regularStripe from 'stripe';
 import type Stripe from 'stripe';
 
 const env = process.env;
@@ -843,8 +843,8 @@ const hasEnv =
 
 const stripe = hasEnv
   ? getStripe({
-      projectGroupId: env.NEXT_PUBLIC_PROJECT_GROUP_ID,
-      token: env.CREATE_TEMP_API_KEY,
+      projectGroupId: env.NEXT_PUBLIC_PROJECT_GROUP_ID!,
+      token: env.CREATE_TEMP_API_KEY!,
     })
   : regularStripe;
 

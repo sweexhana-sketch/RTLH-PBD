@@ -102,12 +102,12 @@ const getRenderIdVisitor =
               t.stringLiteral('@/__create/PolymorphicComponent')
             );
             const firstImport = Array.isArray(body)
-              ? body.findIndex((p) => p.isImportDeclaration())
+              ? (body as NodePath<t.Node>[]).findIndex((p) => p.isImportDeclaration())
               : -1;
             if (firstImport === -1) {
               program.unshiftContainer('body', importDecl);
-            } else {
-              body[firstImport].insertBefore(importDecl);
+            } else if (Array.isArray(body)) {
+              (body[firstImport] as any).insertBefore(importDecl);
             }
           }
 

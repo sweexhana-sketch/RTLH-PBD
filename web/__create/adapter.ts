@@ -16,7 +16,7 @@ interface NeonUser extends AdapterUser {
 }
 
 interface NeonAdapter extends Adapter {
-  createUser(data: AdapterUser): Promise<AdapterUser>;
+  createUser(data: Omit<AdapterUser, 'id'>): Promise<AdapterUser>;
   getUser(userId: string): Promise<AdapterUser | null>;
   getUserByEmail(email: string): Promise<NeonUser | null>;
   getUserByAccount(data: {

@@ -1,4 +1,6 @@
+// @ts-ignore
 import type { LocationGeocodedAddress } from 'expo-location';
+// @ts-ignore
 import * as NativeLocation from 'expo-location';
 
 type Coords = { latitude: number; longitude: number };
