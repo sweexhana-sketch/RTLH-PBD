@@ -1,7 +1,7 @@
 import { skipCSRFCheck } from '@auth/core';
 import Credentials from '@auth/core/providers/credentials';
 import { authHandler, initAuthConfig } from '@hono/auth-js';
-import { Pool, neonConfig } from '@neondatabase/serverless';
+import { neon } from '@neondatabase/serverless';
 import { hash, verify } from 'argon2';
 import { Hono } from 'hono';
 import { env } from 'hono/adapter';
@@ -10,7 +10,7 @@ import { proxy } from 'hono/proxy';
 import { bodyLimit } from 'hono/body-limit';
 import { createHonoServer } from 'react-router-hono-server/node';
 import { serializeError } from 'serialize-error';
-import ws from 'ws';
+// import ws from 'ws'; // Disabled for HTTP driver
 import NeonAdapter from './adapter';
 import { getHTMLForErrorPage } from './get-html-for-error-page';
 import { isAuthAction } from './is-auth-action';
@@ -62,17 +62,17 @@ const isProd = (import.meta as any).env?.PROD || getStaticEnv('NODE_ENV') === 'p
 
 const criticalEnvVars = ['DATABASE_URL', 'AUTH_SECRET'];
 
-let _pool: Pool | null = null;
+let _db: any = null;
 let _adapter: any = null;
 
 const getDb = () => {
-  if (!_pool) {
-    log('Initializing Database Pool (Lazy)...');
+  if (!_db) {
+    log('Initializing Database HTTP Client (Neon)...');
     const dbUrl = getStaticEnv('DATABASE_URL');
     if (!dbUrl) log('WARNING: DATABASE_URL is missing.');
-    _pool = new Pool({ connectionString: dbUrl });
+    _db = neon(dbUrl || '');
   }
-  return _pool;
+  return _db;
 };
 
 const getAdapter = () => {
@@ -90,7 +90,7 @@ criticalEnvVars.forEach((varName) => {
   }
 });
 
-neonConfig.webSocketConstructor = ws;
+// neonConfig.webSocketConstructor = ws; // Disabled for HTTP driver
 
 const app = new Hono();
 
@@ -110,8 +110,9 @@ app.get('/api/diag', async (c) => {
   try {
     const db = getDb();
     const start = Date.now();
-    await db.query('SELECT 1');
-    dbStatus = `connected (${Date.now() - start}ms)`;
+    // HTTP driver uses the client as a function
+    await db('SELECT 1');
+    dbStatus = `connected (HTTP, ${Date.now() - start}ms)`;
   } catch (e: any) {
     dbStatus = `error: ${e.message}`;
   }

@@ -5,7 +5,7 @@ import type {
   VerificationToken,
 } from '@auth/core/adapters';
 import type { ProviderType } from '@auth/core/providers';
-import type { Pool } from '@neondatabase/serverless';
+// import type { Pool } from '@neondatabase/serverless'; // Disabled for HTTP driver
 
 interface NeonUser extends AdapterUser {
   accounts: {
@@ -39,7 +39,7 @@ interface NeonAdapter extends Adapter {
   }): Promise<void>;
 }
 
-export default function NeonAdapter(client: Pool): NeonAdapter {
+export default function NeonAdapter(client: any): NeonAdapter {
   return {
     async createVerificationToken(
       verificationToken: VerificationToken
@@ -49,7 +49,7 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
         INSERT INTO auth_verification_token ( identifier, expires, token )
         VALUES ($1, $2, $3)
         `;
-      await client.query(sql, [identifier, expires, token]);
+      await client(sql, [identifier, expires, token]);
       return verificationToken;
     },
     async useVerificationToken({
@@ -62,8 +62,8 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
       const sql = `delete from auth_verification_token
       where identifier = $1 and token = $2
       RETURNING identifier, expires, token `;
-      const result = await client.query(sql, [identifier, token]);
-      return result.rowCount !== 0 ? result.rows[0] : null;
+      const result = await client(sql, [identifier, token]);
+      return result.length !== 0 ? result[0] : null;
     },
 
     async createUser(user: Omit<AdapterUser, 'id'>) {
@@ -72,37 +72,37 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
         INSERT INTO auth_users (name, email, "emailVerified", image)
         VALUES ($1, $2, $3, $4)
         RETURNING id, name, email, "emailVerified", image`;
-      const result = await client.query(sql, [
+      const result = await client(sql, [
         name,
         email,
         emailVerified,
         image,
       ]);
-      return result.rows[0];
+      return result[0];
     },
     async getUser(id: string) {
       const sql = 'select * from auth_users where id = $1';
       try {
-        const result = await client.query(sql, [id]);
-        return result.rowCount === 0 ? null : result.rows[0];
+        const result = await client(sql, [id]);
+        return result.length === 0 ? null : result[0];
       } catch {
         return null;
       }
     },
     async getUserByEmail(email) {
       const sql = 'select * from auth_users where email = $1';
-      const result = await client.query(sql, [email]);
-      if (result.rowCount === 0) {
+      const result = await client(sql, [email]);
+      if (result.length === 0) {
         return null;
       }
-      const userData = result.rows[0];
-      const accountsData = await client.query(
+      const userData = result[0];
+      const accountsData = await client(
         'select * from auth_accounts where "userId" = $1',
         [userData.id]
       );
       return {
         ...userData,
-        accounts: accountsData.rows,
+        accounts: accountsData,
       };
     },
     async getUserByAccount({
@@ -116,13 +116,13 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
           and
           a."providerAccountId" = $2`;
 
-      const result = await client.query(sql, [provider, providerAccountId]);
-      return result.rowCount !== 0 ? result.rows[0] : null;
+      const result = await client(sql, [provider, providerAccountId]);
+      return result.length !== 0 ? result[0] : null;
     },
     async updateUser(user: Partial<AdapterUser>): Promise<AdapterUser> {
       const fetchSql = 'select * from auth_users where id = $1';
-      const query1 = await client.query(fetchSql, [user.id]);
-      const oldUser = query1.rows[0];
+      const result1 = await client(fetchSql, [user.id]);
+      const oldUser = result1[0];
 
       const newUser = {
         ...oldUser,
@@ -136,14 +136,14 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
         where id = $1
         RETURNING name, id, email, "emailVerified", image
       `;
-      const query2 = await client.query(updateSql, [
+      const result2 = await client(updateSql, [
         id,
         name,
         email,
         emailVerified,
         image,
       ]);
-      return query2.rows[0];
+      return result2[0];
     },
     async linkAccount(account) {
       const sql = `
@@ -194,8 +194,8 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
         account.extraData?.password,
       ];
 
-      const result = await client.query(sql, params);
-      return result.rows[0];
+      const result = await client(sql, params);
+      return result[0];
     },
     async createSession({ sessionToken, userId, expires }) {
       if (userId === undefined) {
@@ -205,8 +205,8 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
       values ($1, $2, $3)
       RETURNING id, "sessionToken", "userId", expires`;
 
-      const result = await client.query(sql, [userId, expires, sessionToken]);
-      return result.rows[0];
+      const result = await client(sql, [userId, expires, sessionToken]);
+      return result[0];
     },
 
     async getSessionAndUser(sessionToken: string | undefined): Promise<{
@@ -216,23 +216,23 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
       if (sessionToken === undefined) {
         return null;
       }
-      const result1 = await client.query(
+      const result1 = await client(
         `select * from auth_sessions where "sessionToken" = $1`,
         [sessionToken]
       );
-      if (result1.rowCount === 0) {
+      if (result1.length === 0) {
         return null;
       }
-      const session: AdapterSession = result1.rows[0];
+      const session: AdapterSession = result1[0];
 
-      const result2 = await client.query(
+      const result2 = await client(
         'select * from auth_users where id = $1',
         [session.userId]
       );
-      if (result2.rowCount === 0) {
+      if (result2.length === 0) {
         return null;
       }
-      const user = result2.rows[0];
+      const user = result2[0];
       return {
         session,
         user,
@@ -242,14 +242,14 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
       session: Partial<AdapterSession> & Pick<AdapterSession, 'sessionToken'>
     ): Promise<AdapterSession | null | undefined> {
       const { sessionToken } = session;
-      const result1 = await client.query(
+      const result1 = await client(
         `select * from auth_sessions where "sessionToken" = $1`,
         [sessionToken]
       );
-      if (result1.rowCount === 0) {
+      if (result1.length === 0) {
         return null;
       }
-      const originalSession: AdapterSession = result1.rows[0];
+      const originalSession: AdapterSession = result1[0];
 
       const newSession: AdapterSession = {
         ...originalSession,
@@ -259,28 +259,29 @@ export default function NeonAdapter(client: Pool): NeonAdapter {
         UPDATE auth_sessions set
         expires = $2
         where "sessionToken" = $1
+        RETURNING id, "sessionToken", "userId", expires
         `;
-      const result = await client.query(sql, [
+      const result = await client(sql, [
         newSession.sessionToken,
         newSession.expires,
       ]);
-      return result.rows[0];
+      return result[0];
     },
     async deleteSession(sessionToken) {
       const sql = `delete from auth_sessions where "sessionToken" = $1`;
-      await client.query(sql, [sessionToken]);
+      await client(sql, [sessionToken]);
     },
     async unlinkAccount(partialAccount) {
       const { provider, providerAccountId } = partialAccount;
       const sql = `delete from auth_accounts where "providerAccountId" = $1 and provider = $2`;
-      await client.query(sql, [providerAccountId, provider]);
+      await client(sql, [providerAccountId, provider]);
     },
     async deleteUser(userId: string) {
-      await client.query('delete from auth_users where id = $1', [userId]);
-      await client.query('delete from auth_sessions where "userId" = $1', [
+      await client('delete from auth_users where id = $1', [userId]);
+      await client('delete from auth_sessions where "userId" = $1', [
         userId,
       ]);
-      await client.query('delete from auth_accounts where "userId" = $1', [
+      await client('delete from auth_accounts where "userId" = $1', [
         userId,
       ]);
     },
