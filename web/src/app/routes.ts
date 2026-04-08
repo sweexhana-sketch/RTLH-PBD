@@ -104,19 +104,20 @@ function generateRoutes(node: Tree): RouteConfigEntry[] {
 
 	return routes;
 }
-if (import.meta.env.DEV) {
-	import.meta.glob('./**/page.jsx', {});
-	if (import.meta.hot) {
-		import.meta.hot.accept((newSelf) => {
-			import.meta.hot?.invalidate();
+if ((import.meta as any).env?.DEV) {
+	(import.meta as any).glob('./**/page.jsx', {});
+	if ((import.meta as any).hot) {
+		(import.meta as any).hot.accept((newSelf: any) => {
+			(import.meta as any).hot?.invalidate();
 		});
 	}
 }
 
 // In production, we cannot rely on readdirSync since the server bundle flattens directories
 let finalRoutes: RouteConfigEntry[] = [];
+const isProd = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1' || (import.meta as any).env?.PROD;
 
-if (process.env.NODE_ENV === 'production' || import.meta.env?.PROD) {
+if (isProd) {
 	finalRoutes = [
 		index('./page.jsx'),
 		route('sync', './sync/page.jsx'),
@@ -133,4 +134,4 @@ if (process.env.NODE_ENV === 'production' || import.meta.env?.PROD) {
 	finalRoutes = [...generateRoutes(tree), route('*?', './__create/not-found.tsx')];
 }
 
-export default finalRoutes;;
+export default finalRoutes;

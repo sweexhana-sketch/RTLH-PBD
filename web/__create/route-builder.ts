@@ -63,12 +63,15 @@ function getHonoPath(routeFile: string): { name: string; pattern: string }[] {
   return transformedParts;
 }
 
+const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production' || (import.meta as any).env?.PROD;
+
 // Import and register all routes
 async function registerRoutes() {
   api.routes = [];
 
-  if (import.meta.env.PROD) {
-    const routeModules = import.meta.glob('../src/app/api/**/route.js', { eager: true });
+  if (isVercel) {
+    // In production/Vercel, we MUST use static analysis (glob)
+    const routeModules = (import.meta as any).glob('../src/app/api/**/route.js', { eager: true });
     for (const [routeFile, routeExports] of Object.entries(routeModules)) {
       const relativePath = routeFile.replace('../src/app/api', '');
       const parts = relativePath.split('/').filter(Boolean);
@@ -102,7 +105,7 @@ async function registerRoutes() {
       }
     }
   } else {
-    // Development logic
+    // Development logic - only run if NOT on Vercel
     const routeFiles = (
       await findRouteFiles(__dirname).catch((error) => {
         console.error('Error finding route files:', error);
@@ -136,12 +139,12 @@ async function registerRoutes() {
 await registerRoutes();
 
 // Hot reload routes in development
-if (import.meta.env.DEV) {
-  import.meta.glob('../src/app/api/**/route.js', {
+if (!isVercel && (import.meta as any).env?.DEV) {
+  (import.meta as any).glob('../src/app/api/**/route.js', {
     eager: true,
   });
-  if (import.meta.hot) {
-    import.meta.hot.accept((newSelf) => {
+  if ((import.meta as any).hot) {
+    (import.meta as any).hot.accept((newSelf: any) => {
       registerRoutes().catch((err) => {
         console.error('Error reloading routes:', err);
       });

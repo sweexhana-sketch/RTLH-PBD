@@ -5,8 +5,9 @@ import { useCallback, useEffect, useState } from 'react';
 
 export async function loader({ params }: Route.LoaderArgs) {
   let matches: string[] = [];
+  const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production' || (import.meta as any).env?.PROD;
   
-  if (process.env.NODE_ENV === 'development') {
+  if (!isVercel && (import.meta as any).env?.DEV) {
     // Only run fast-glob in development to prevent Serverless hanging
     matches = await fg('src/**/page.{js,jsx,ts,tsx}');
   } else {

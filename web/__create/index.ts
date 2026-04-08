@@ -1,5 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
-import nodeConsole from 'node:console';
 import { skipCSRFCheck } from '@auth/core';
 import Credentials from '@auth/core/providers/credentials';
 import { authHandler, initAuthConfig } from '@hono/auth-js';
@@ -18,22 +16,12 @@ import NeonAdapter from './adapter';
 import { getHTMLForErrorPage } from './get-html-for-error-page';
 import { isAuthAction } from './is-auth-action';
 import { API_BASENAME, api } from './route-builder';
+
+// @ts-expect-error - virtual module
+import * as serverBuild from 'virtual:react-router/server-build';
+import { createRequestHandler } from 'react-router';
+
 neonConfig.webSocketConstructor = ws;
-
-const als = new AsyncLocalStorage<{ requestId: string }>();
-
-for (const method of ['log', 'info', 'warn', 'error', 'debug'] as const) {
-  const original = nodeConsole[method].bind(console);
-
-  console[method] = (...args: unknown[]) => {
-    const requestId = als.getStore()?.requestId;
-    if (requestId) {
-      original(`[traceId:${requestId}]`, ...args);
-    } else {
-      original(...args);
-    }
-  };
-}
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -43,12 +31,6 @@ const adapter = NeonAdapter(pool);
 const app = new Hono();
 
 app.use('*', requestId());
-
-app.use('*', (c, next) => {
-  const requestId = c.get('requestId');
-  return als.run({ requestId }, () => next());
-});
-
 app.use(contextStorage());
 
 app.onError((err, c) => {
@@ -291,22 +273,20 @@ app.use('/api/auth/*', async (c, next) => {
   }
   return next();
 });
+
 app.route(API_BASENAME, api);
 
-// @ts-expect-error - virtual module
-import * as serverBuild from 'virtual:react-router/server-build';
-import { createRequestHandler } from 'react-router';
-
 let server;
+const isProd = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1';
 
-if (process.env.NODE_ENV === 'development') {
+if (!isProd) {
   server = await createHonoServer({
     app,
     defaultLogger: false,
   });
 } else {
+  const requestHandler = createRequestHandler(serverBuild, 'production');
   app.all('*', async (c) => {
-    const requestHandler = createRequestHandler(serverBuild, 'production');
     return await requestHandler(c.req.raw);
   });
 }
