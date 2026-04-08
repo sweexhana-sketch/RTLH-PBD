@@ -4,11 +4,9 @@ import { authHandler, initAuthConfig } from '@hono/auth-js';
 import { Pool, neonConfig } from '@neondatabase/serverless';
 import { hash, verify } from 'argon2';
 import { Hono } from 'hono';
-import { contextStorage, getContext } from 'hono/context-storage';
 import { cors } from 'hono/cors';
 import { proxy } from 'hono/proxy';
 import { bodyLimit } from 'hono/body-limit';
-import { requestId } from 'hono/request-id';
 import { createHonoServer } from 'react-router-hono-server/node';
 import { serializeError } from 'serialize-error';
 import ws from 'ws';
@@ -21,24 +19,31 @@ import { API_BASENAME, api } from './route-builder';
 import * as serverBuild from 'virtual:react-router/server-build';
 import { createRequestHandler } from 'react-router';
 
-console.log('[DEBUG] Starting server initialization...');
+console.error('[DEBUG] Starting server initialization...');
 
 neonConfig.webSocketConstructor = ws;
 
-console.log('[DEBUG] Initializing Database Pool...');
+console.error('[DEBUG] Initializing Database Pool...');
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 const adapter = NeonAdapter(pool);
-console.log('[DEBUG] Database Pool initialized.');
+console.error('[DEBUG] Database Pool initialized.');
 
 const app = new Hono();
 
-app.use('*', requestId());
-app.use(contextStorage());
+// Polyfill for Vercel Headers issue
+app.use('*', async (c, next) => {
+  if (c.req.raw && c.req.raw.headers && typeof c.req.raw.headers.get !== 'function') {
+    console.error('[DEBUG] Polyfilling missing headers.get()');
+    const headers = c.req.raw.headers as any;
+    c.req.raw.headers.get = (name: string) => headers[name.toLowerCase()] || null;
+  }
+  await next();
+});
 
 app.onError((err, c) => {
-  console.error('[DEBUG] Hono Error:', err);
+  console.error('[DEBUG] Hono Error Encountered:', err);
   if (c.req.method !== 'GET') {
     return c.json(
       {
@@ -72,7 +77,7 @@ for (const method of ['post', 'put', 'patch'] as const) {
 }
 
 if (process.env.AUTH_SECRET) {
-  console.log('[DEBUG] Initializing Auth.js middleware...');
+  console.error('[DEBUG] Initializing Auth.js middleware...');
   app.use(
     '*',
     initAuthConfig((c) => ({
@@ -251,7 +256,7 @@ if (process.env.AUTH_SECRET) {
       ],
     }))
   );
-  console.log('[DEBUG] Auth.js middleware initialized.');
+  console.error('[DEBUG] Auth.js middleware initialized.');
 }
 app.all('/integrations/:path{.+}', async (c, next) => {
   const queryParams = c.req.query();
@@ -281,30 +286,30 @@ app.use('/api/auth/*', async (c, next) => {
   return next();
 });
 
-console.log('[DEBUG] Registering API routes...');
+console.error('[DEBUG] Registering API routes...');
 app.route(API_BASENAME, api);
-console.log('[DEBUG] API routes registered.');
+console.error('[DEBUG] API routes registered.');
 
 let server;
 const isProd = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1';
 
 if (!isProd) {
-  console.log('[DEBUG] Starting in Development mode...');
+  console.error('[DEBUG] Starting in Development mode...');
   server = await createHonoServer({
     app,
     defaultLogger: false,
   });
 } else {
-  console.log('[DEBUG] Starting in Production mode...');
-  console.log('[DEBUG] Creating React Router request handler...');
+  console.error('[DEBUG] Starting in Production mode...');
+  console.error('[DEBUG] Creating React Router request handler...');
   const requestHandler = createRequestHandler(serverBuild, 'production');
-  console.log('[DEBUG] React Router request handler created.');
+  console.error('[DEBUG] React Router request handler created.');
   app.all('*', async (c) => {
     return await requestHandler(c.req.raw);
   });
 }
 
-console.log('[DEBUG] Server initialization complete.');
+console.error('[DEBUG] Server initialization complete.');
 
 export { app };
 export default server;
