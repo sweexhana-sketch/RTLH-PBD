@@ -81,7 +81,7 @@ if (process.env.AUTH_SECRET) {
   app.use(
     '*',
     initAuthConfig((c) => ({
-      secret: c.env.AUTH_SECRET,
+      secret: c.env?.AUTH_SECRET || process.env.AUTH_SECRET,
       pages: {
         signIn: '/account/signin',
         signOut: '/account/logout',
