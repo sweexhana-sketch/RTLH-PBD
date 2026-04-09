@@ -67,35 +67,56 @@ export const fetchWithHeaders = async (
   const isExternalFetch = !isFirstPartyURL(url) && !isSecondPartyUrl(url);
   const isNeonQuery = url.includes('neon.tech');
 
-  // we should not add headers to requests that don't go to our own server
-  // or if it's an API request, or if it's a Neon DB query
-  if (isExternalFetch || url.startsWith('/api') || isNeonQuery) {
-    return originalFetch(input, init);
+  // --- VERCEL EVENT LOOP HANG FIX ---
+  // Vercel serverless waits for the Node.js event loop to be completely empty before completing.
+  // If an external fetch (like Neon DB) drops packets and hangs (keepAlive/timeout bugs), 
+  // Node's event loop stays alive for 300s, causing Vercel to hit 60s maxDuration and throw 504.
+  // We MUST brutally abort any zombie fetch connection after 12 seconds.
+  let controller: AbortController | undefined;
+  let timeoutId: any;
+
+  if (isBackend() && !(input instanceof Request && input.signal) && (!init || !init.signal)) {
+    controller = new AbortController();
+    timeoutId = setTimeout(() => controller!.abort(new Error('FETCH_GLOBAL_TIMEOUT')), 12000);
+    
+    if (input instanceof Request) {
+      input = new Request(input, { signal: controller.signal });
+    } else {
+      init = { ...init, signal: controller.signal };
+    }
   }
 
-  // Normalize Request into init
-  let finalInit: RequestInit;
-  if (input instanceof Request) {
-    const hasBody = !!input.body;
-    finalInit = {
-      method: input.method,
-      headers: new Headers(input.headers),
-      body: input.body,
-      mode: input.mode,
-      credentials: input.credentials,
-      cache: input.cache,
-      redirect: input.redirect,
-      referrer: input.referrer,
-      referrerPolicy: input.referrerPolicy,
-      integrity: input.integrity,
-      keepalive: input.keepalive,
-      signal: input.signal,
-      ...(hasBody ? { duplex: 'half' } : {}),
-      ...init,
-    };
-  } else {
-    finalInit = { ...init, headers: new Headers(init?.headers ?? {}) };
-  }
+  try {
+    // we should not add headers to requests that don't go to our own server
+    // or if it's an API request, or if it's a Neon DB query
+    if (isExternalFetch || url.startsWith('/api') || isNeonQuery) {
+      return await originalFetch(input, init);
+    }
+
+    // Normalize Request into init
+    let finalInit: RequestInit;
+    if (input instanceof Request) {
+      const hasBody = !!input.body;
+      finalInit = {
+        method: input.method,
+        headers: new Headers(input.headers),
+        body: input.body,
+        mode: input.mode,
+        credentials: input.credentials,
+        cache: input.cache,
+        redirect: input.redirect,
+        referrer: input.referrer,
+        referrerPolicy: input.referrerPolicy,
+        integrity: input.integrity,
+        keepalive: input.keepalive,
+        signal: input.signal, // includes our abort controller
+        ...(hasBody && typeof Request !== 'undefined' && ('duplex' in Request.prototype) ? { duplex: 'half' } : {}),
+        ...init,
+      };
+    } else {
+      finalInit = { ...init, headers: new Headers(init?.headers ?? {}) };
+    }
+
 
   const finalHeaders = new Headers(finalInit.headers);
   for (const [key, value] of Object.entries(additionalHeaders)) {
@@ -132,6 +153,10 @@ export const fetchWithHeaders = async (
           : error,
     });
     throw error;
+  } finally {
+    if (timeoutId) {
+       clearTimeout(timeoutId);
+    }
   }
 };
 
