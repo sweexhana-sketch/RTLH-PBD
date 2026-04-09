@@ -117,20 +117,18 @@ export const fetchWithHeaders = async (
       finalInit = { ...init, headers: new Headers(init?.headers ?? {}) };
     }
 
+    const finalHeaders = new Headers(finalInit.headers);
+    for (const [key, value] of Object.entries(additionalHeaders)) {
+      if (value) finalHeaders.set(key, value);
+    }
+    finalInit.headers = finalHeaders;
 
-  const finalHeaders = new Headers(finalInit.headers);
-  for (const [key, value] of Object.entries(additionalHeaders)) {
-    if (value) finalHeaders.set(key, value);
-  }
-  finalInit.headers = finalHeaders;
+    const prefix = !isSecondPartyUrl(url)
+      ? isBackend()
+        ? (process.env.NEXT_PUBLIC_CREATE_BASE_URL ?? 'https://www.create.xyz')
+        : ''
+      : '';
 
-  const prefix = !isSecondPartyUrl(url)
-    ? isBackend()
-      ? (process.env.NEXT_PUBLIC_CREATE_BASE_URL ?? 'https://www.create.xyz')
-      : ''
-    : '';
-
-  try {
     const result = await originalFetch(`${prefix}${url}`, finalInit);
     if (!result.ok) {
       postToParent(
@@ -155,7 +153,7 @@ export const fetchWithHeaders = async (
     throw error;
   } finally {
     if (timeoutId) {
-       clearTimeout(timeoutId);
+      clearTimeout(timeoutId);
     }
   }
 };
