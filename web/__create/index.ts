@@ -480,7 +480,11 @@ if (!isProd) {
     if (response.body && response.headers.get('Content-Type')?.includes('text/html')) {
         log(`[${requestId}] Buffering HTML response stream...`);
         try {
-            const bodyText = await response.text();
+            // Buffer with an 8-second timeout to strictly prevent 60s Vercel 504s
+            const bodyText = await Promise.race([
+                response.text(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('HTML Stream Buffering timed out after 8s')), 8000))
+            ]) as string;
             
             // Create new headers, stripping chunked encoding if present
             const newHeaders = new Headers(response.headers);
@@ -494,6 +498,10 @@ if (!isProd) {
             });
         } catch (streamErr) {
             log(`[${requestId}] ERROR buffering stream: ${streamErr}`);
+            return new Response('<h1>500 Internal Server Error</h1><p>Rendering timed out. Stream did not close.</p>', { 
+                status: 500, 
+                headers: { 'Content-Type': 'text/html' } 
+            });
         }
     }
 
