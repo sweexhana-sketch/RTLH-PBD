@@ -70,7 +70,20 @@ const getDb = () => {
     log('Initializing Database HTTP Client (Neon) with 10s guard...');
     const dbUrl = getStaticEnv('DATABASE_URL');
     if (!dbUrl) log('WARNING: DATABASE_URL is missing.');
-    const rawClient = neon(dbUrl || '');
+    
+    const strictFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(new Error('DATABASE_FETCH_TIMEOUT')), 10000);
+        try {
+            return await fetch(url, { ...init, signal: controller.signal });
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    };
+    
+    // Explicitly pass strictFetch to override neon's internal fetch so that TCP sockets
+    // are forcefully destroyed at 10s, ensuring the Node Event Loop empties properly.
+    const rawClient = neon(dbUrl || '', { fetchFunction: strictFetch });
 
     // Universal DB Proxy with 10s timeout to protect Auth and App
     _db = async (strings: any, ...values: any[]) => {
@@ -84,7 +97,7 @@ const getDb = () => {
           queryTimeout
         ]);
       } finally {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
       }
     };
   }
