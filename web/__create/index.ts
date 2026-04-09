@@ -129,21 +129,29 @@ app.all('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /', 200));
 
 // --- GLOBAL CIRCUIT BREAKER (15s) ---
 app.use('*', async (c, next) => {
-  // Bypasses
-  if (c.req.path === '/health' || c.req.path === '/favicon.ico') return next();
+  const requestId = Math.random().toString(36).substring(7);
+  (c as any).requestId = requestId;
+
+  if (c.req.path === '/health' || c.req.path === '/favicon.ico') {
+      return next();
+  }
+
+  log(`[${requestId}] [HONO_REQUEST_START] ${c.req.method} ${c.req.path}`);
 
   let timer: any;
   const timeoutPromise = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error('GLOBAL_TIMEOUT: Process took longer than 15s')), 15000);
+    timer = setTimeout(() => reject(new Error('GLOBAL_TIMEOUT: Process took longer than 20s')), 20000);
   });
 
   try {
+    const start = Date.now();
     await Promise.race([next(), timeoutPromise]);
+    log(`[${requestId}] [HONO_REQUEST_COMPLETE] Finished in ${Date.now() - start}ms`);
   } catch (err: any) {
-    log(`GLOBAL TIMEOUT/ERROR caught: ${err.message || err}`);
+    log(`[${requestId}] [GLOBAL TIMEOUT/ERROR] caught: ${err.message || err}`);
     return c.html(getHTMLForErrorPage(err), 500);
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 });
 

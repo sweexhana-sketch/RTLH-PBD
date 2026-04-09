@@ -1,14 +1,18 @@
 import { handle } from 'hono/vercel';
 import { app } from '../build/server/index.js';
 
-const log = (msg) => {
-  console.error(`[${new Date().toISOString()}] [API-ENTRY] ${msg}`);
-};
-
 export const config = { runtime: 'nodejs' };
 
-if (!app) {
-    log('CRITICAL ERROR: app is missing from ../build/server/index.js!');
-}
+const h = handle(app);
 
-export default handle(app);
+export default async (req, res) => {
+  const invocationId = Math.random().toString(36).substring(7);
+  console.error(`[${new Date().toISOString()}] [API-ENTRY] [${invocationId}] LAMBDA_INVOKED: ${req.method} ${req.url}`);
+  try {
+    const result = await h(req, res);
+    return result;
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] [API-ENTRY] [${invocationId}] LAMBDA_ERROR:`, err);
+    throw err;
+  }
+};
