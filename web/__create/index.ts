@@ -20,8 +20,9 @@ import { API_BASENAME, api, ensureRoutesRegistered } from './route-builder';
 import * as serverBuild from 'virtual:react-router/server-build';
 import { createRequestHandler } from 'react-router';
 
-const log = (msg: string) => {
-  console.error(`[${new Date().toISOString()}] [DEBUG] ${msg}`);
+const log = (msg: string, requestId?: string) => {
+  const idPrefix = requestId ? ` [${requestId}]` : '';
+  console.error(`[${new Date().toISOString()}] [DEBUG]${idPrefix} ${msg}`);
 };
 
 /**
@@ -129,16 +130,12 @@ const app = new Hono();
 app.all('/favicon.ico', (c) => c.text('Not Found', 404));
 app.all('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /', 200));
 
-// --- GLOBAL CIRCUIT BREAKER (15s) ---
+// --- GLOBAL CIRCUIT BREAKER (20s) ---
 app.use('*', async (c, next) => {
   const requestId = Math.random().toString(36).substring(7);
   (c as any).requestId = requestId;
 
-  if (c.req.path === '/health' || c.req.path === '/favicon.ico') {
-      return next();
-  }
-
-  log(`[${requestId}] [HONO_REQUEST_START] ${c.req.method} ${c.req.path}`);
+  log(`[HONO_REQUEST_START] ${c.req.method} ${c.req.path}`, requestId);
 
   let timer: any;
   const timeoutPromise = new Promise((_, reject) => {
@@ -148,9 +145,9 @@ app.use('*', async (c, next) => {
   try {
     const start = Date.now();
     await Promise.race([next(), timeoutPromise]);
-    log(`[${requestId}] [HONO_REQUEST_COMPLETE] Finished in ${Date.now() - start}ms`);
+    log(`[HONO_REQUEST_COMPLETE] Finished in ${Date.now() - start}ms`, requestId);
   } catch (err: any) {
-    log(`[${requestId}] [GLOBAL TIMEOUT/ERROR] caught: ${err.message || err}`);
+    log(`[GLOBAL TIMEOUT/ERROR] caught: ${err.message || err}`, requestId);
     return c.html(getHTMLForErrorPage(err), 500);
   } finally {
     if (timer) clearTimeout(timer);
@@ -235,192 +232,150 @@ if (getStaticEnv('AUTH_SECRET')) {
   app.use(
     '*',
     initAuthConfig(async (c) => {
-      log('Auth.js: Resolving config callback...');
+      const requestId = (c as any).requestId;
+      log('Auth.js: Config callback invoked', requestId);
+
       const secret = getSafeEnv(c, 'AUTH_SECRET');
       if (!secret) {
-        log('WARNING: AUTH_SECRET resolve failed in callback. Using static fallback if available.');
+        log('WARNING: AUTH_SECRET resolve failed in callback. Using static fallback if available.', requestId);
       }
+
+      const db = getDb();
+      log('Auth.js: Registering adapter...', requestId);
+      const adapter = NeonAdapter(db);
+
       return {
         secret: secret || getStaticEnv('AUTH_SECRET') || 'dummy-secret-to-prevent-crash',
-      pages: {
-        signIn: '/account/signin',
-        signOut: '/account/logout',
-      },
-      skipCSRFCheck,
-      session: {
-        strategy: 'jwt',
-      },
-      callbacks: {
-        session({ session, token }) {
-          if (token.sub) {
-            session.user.id = token.sub;
-          }
-          return session;
+        adapter,
+        pages: {
+          signIn: '/account/signin',
+          signOut: '/account/logout',
         },
-      },
-      cookies: {
-        csrfToken: {
-          options: {
-            secure: true,
-            sameSite: 'none',
+        skipCSRFCheck,
+        session: {
+          strategy: 'jwt',
+          maxAge: 30 * 24 * 60 * 60,
+        },
+        callbacks: {
+          async session({ session, token }: any) {
+            if (token?.sub) session.user.id = token.sub;
+            return session;
+          },
+          async jwt({ token, user }: any) {
+            if (user) token.id = user.id;
+            return token;
           },
         },
-        sessionToken: {
-          options: {
-            secure: true,
-            sameSite: 'none',
+        cookies: {
+          csrfToken: {
+            options: {
+              secure: true,
+              sameSite: 'none',
+            },
+          },
+          sessionToken: {
+            options: {
+              secure: true,
+              sameSite: 'none',
+            },
+          },
+          callbackUrl: {
+            options: {
+              secure: true,
+              sameSite: 'none',
+            },
           },
         },
-        callbackUrl: {
-          options: {
-            secure: true,
-            sameSite: 'none',
-          },
-        },
-      },
-      providers: [
-        // Dev-only provider for simulated social sign-in (Google, Facebook, etc.)
-        // Creates or finds a user by email without requiring a password.
-        ...(process.env.NEXT_PUBLIC_CREATE_ENV === 'DEVELOPMENT'
-          ? [
-              Credentials({
-                id: 'dev-social',
-                name: 'Development Social Sign-in',
-                credentials: {
-                  email: { label: 'Email', type: 'email' },
-                  name: { label: 'Name', type: 'text' },
-                  provider: { label: 'Provider', type: 'text' },
-                },
-                authorize: async (credentials) => {
-                  const { email, name, provider } = credentials;
-                  if (!email || typeof email !== 'string') return null;
-
-                  const adapter = getAdapter();
-                  const existing = await adapter.getUserByEmail(email);
-                  if (existing) return existing;
-
-                  const allowedProviders = new Set(['google', 'facebook', 'twitter', 'apple']);
-                  const providerName =
-                    typeof provider === 'string' && allowedProviders.has(provider.toLowerCase())
-                      ? provider.toLowerCase()
-                      : 'google';
-                  const newUser = await adapter.createUser({
-                    emailVerified: null,
-                    email,
-                    name:
-                      typeof name === 'string' && name.length > 0
-                        ? name
-                        : undefined,
-                  });
-                  await adapter.linkAccount({
-                    type: 'oauth',
-                    userId: newUser.id,
-                    provider: providerName,
-                    providerAccountId: `dev-${newUser.id}`,
-                  });
-                  return newUser;
-                },
-              }),
-            ]
-          : []),
-        Credentials({
-          id: 'credentials-signin',
-          name: 'Credentials Sign in',
-          credentials: {
-            email: {
-              label: 'Email',
-              type: 'email',
+        providers: [
+          Credentials({
+            id: 'credentials-signin',
+            name: 'Credentials Sign in',
+            credentials: {
+              email: { label: 'Email', type: 'email' },
+              password: { label: 'Password', type: 'password' },
             },
-            password: {
-              label: 'Password',
-              type: 'password',
+            authorize: async (credentials) => {
+              const { email, password } = credentials;
+              if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
+                return null;
+              }
+
+              log(`Auth.js [Signin]: Authorizing ${email}...`, requestId);
+              const userByEmail = await adapter.getUserByEmail(email);
+              if (!userByEmail) {
+                log(`Auth.js [Signin]: User not found: ${email}`, requestId);
+                return null;
+              }
+
+              const matchingAccount = userByEmail.accounts.find(
+                (account: any) => account.provider === 'credentials'
+              );
+              const accountPassword = matchingAccount?.password;
+              if (!accountPassword) {
+                log(`Auth.js [Signin]: No credential account for ${email}`, requestId);
+                return null;
+              }
+
+              const { default: bcryptInstance } = await import('bcryptjs');
+              const isValid = await bcryptInstance.compare(password, accountPassword);
+              if (!isValid) {
+                log(`Auth.js [Signin]: Invalid password for ${email}`, requestId);
+                return null;
+              }
+
+              log(`Auth.js [Signin]: Success for ${email}`, requestId);
+              return userByEmail;
             },
-          },
-          authorize: async (credentials) => {
-            const { email, password } = credentials;
-            if (!email || !password) {
-              return null;
-            }
-            if (typeof email !== 'string' || typeof password !== 'string') {
-              return null;
-            }
-
-            const adapter = getAdapter();
-            // logic to verify if user exists
-            const user = await adapter.getUserByEmail(email);
-            if (!user) {
-              return null;
-            }
-            const matchingAccount = user.accounts.find(
-              (account: any) => account.provider === 'credentials'
-            );
-            const accountPassword = matchingAccount?.password;
-            if (!accountPassword) {
-              return null;
-            }
-
-            const isValid = await bcrypt.compare(password, accountPassword);
-            if (!isValid) {
-              return null;
-            }
-
-            // return user object with the their profile data
-            return user;
-          },
-        }),
-        Credentials({
-          id: 'credentials-signup',
-          name: 'Credentials Sign up',
-          credentials: {
-            email: {
-              label: 'Email',
-              type: 'email',
+          }),
+          Credentials({
+            id: 'credentials-signup',
+            name: 'Credentials Sign up',
+            credentials: {
+              email: { label: 'Email', type: 'email' },
+              password: { label: 'Password', type: 'password' },
+              name: { label: 'Name', type: 'text' },
+              image: { label: 'Image', type: 'text', required: false },
             },
-            password: {
-              label: 'Password',
-              type: 'password',
-            },
-            name: { label: 'Name', type: 'text' },
-            image: { label: 'Image', type: 'text', required: false },
-          },
-          authorize: async (credentials) => {
-            const { email, password, name, image } = credentials;
-            if (!email || !password) {
-              return null;
-            }
-            if (typeof email !== 'string' || typeof password !== 'string') {
-              return null;
-            }
+            authorize: async (credentials) => {
+              const { email, password, name, image } = credentials;
+              if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
+                return null;
+              }
 
-            const adapter = getAdapter();
-            // logic to verify if user exists
-            const user = await adapter.getUserByEmail(email);
-            if (!user) {
+              log(`Auth.js [Signup]: Attempting signup for ${email}...`, requestId);
+              const existingUser = await adapter.getUserByEmail(email);
+              if (existingUser) {
+                log(`Auth.js [Signup]: User already exists: ${email}`, requestId);
+                return null;
+              }
+
+              const { default: bcryptInstance } = await import('bcryptjs');
               const newUser = await adapter.createUser({
                 emailVerified: null,
                 email,
                 name: typeof name === 'string' && name.length > 0 ? name : undefined,
                 image: typeof image === 'string' && image.length > 0 ? image : undefined,
               });
+
               await adapter.linkAccount({
                 extraData: {
-                  password: await bcrypt.hash(password, 10),
+                  password: await bcryptInstance.hash(password, 10),
                 },
                 type: 'credentials',
                 userId: newUser.id,
-                providerAccountId: newUser.id,
                 provider: 'credentials',
+                providerAccountId: newUser.id,
               });
+
+              log(`Auth.js [Signup]: Success for ${email}`, requestId);
               return newUser;
-            }
-            return null;
-          },
-        }),
-      ],
-    };
-  })
-);
-  log('Auth.js middleware initialized.');
+            },
+          }),
+        ],
+      };
+    })
+  );
+  log('Auth.js middleware attached.');
 }
 app.all('/integrations/:path{.+}', async (c, next) => {
   const queryParams = c.req.query();
