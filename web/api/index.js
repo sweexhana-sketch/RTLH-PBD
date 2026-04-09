@@ -1,5 +1,5 @@
 import { handle } from 'hono/vercel';
-import serverBundle from '../build/server/index.js';
+import { app } from '../build/server/index.js';
 
 const log = (msg) => {
   console.error(`[${new Date().toISOString()}] [API-ENTRY] ${msg}`);
@@ -7,8 +7,8 @@ const log = (msg) => {
 
 export const config = { runtime: 'nodejs' };
 
-if (!serverBundle || !serverBundle.app) {
-    log('CRITICAL ERROR: serverBundle.app is missing!');
+if (!app) {
+    log('CRITICAL ERROR: app is missing from ../build/server/index.js!');
 }
 
-export default handle(serverBundle.app);
+export default handle(app);
