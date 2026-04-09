@@ -472,6 +472,31 @@ if (!isProd) {
     log(`[${requestId}] Entering React Router handler for ${c.req.path}`);
     const response = await cachedRequestHandler(request);
     log(`[${requestId}] Leaving React Router handler after ${Date.now() - requestStart}ms.`);
+
+    // --- VERCEL 504 HANG WORKAROUND ---
+    // Vercel's Node.js runtime has a known issue where piping Web Streams from React Router 
+    // can result in lost 'end' events, causing the Lambda to hang for 60s and throw a 504.
+    // By buffering the HTML stream into a synchronous string, we completely bypass the streaming proxy bug.
+    if (response.body && response.headers.get('Content-Type')?.includes('text/html')) {
+        log(`[${requestId}] Buffering HTML response stream...`);
+        try {
+            const bodyText = await response.text();
+            
+            // Create new headers, stripping chunked encoding if present
+            const newHeaders = new Headers(response.headers);
+            newHeaders.delete('transfer-encoding');
+            
+            log(`[${requestId}] Stream buffered successfully. Sending response.`);
+            return new Response(bodyText, {
+                status: response.status,
+                statusText: response.statusText,
+                headers: newHeaders
+            });
+        } catch (streamErr) {
+            log(`[${requestId}] ERROR buffering stream: ${streamErr}`);
+        }
+    }
+
     return response as Response;
   });
 }
