@@ -81,9 +81,11 @@ const getDb = () => {
         }
     };
     
-    // Explicitly pass strictFetch to override neon's internal fetch so that TCP sockets
-    // are forcefully destroyed at 10s, ensuring the Node Event Loop empties properly.
-    const rawClient = neon(dbUrl || '', { fetchFunction: strictFetch });
+    // Set global fetch function for Neon to ensure all connections use our AbortController
+    // This must be set on neonConfig globally for it to be picked up by the driver.
+    neonConfig.fetchFunction = strictFetch;
+    
+    const rawClient = neon(dbUrl || '');
 
     // Universal DB Proxy with 10s timeout to protect Auth and App
     _db = async (strings: any, ...values: any[]) => {

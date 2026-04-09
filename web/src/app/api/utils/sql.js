@@ -1,4 +1,4 @@
-import { neon } from '@neondatabase/serverless';
+import { neon, neonConfig } from '@neondatabase/serverless';
 
 const strictFetch = async (url, init) => {
     const controller = new AbortController();
@@ -11,6 +11,9 @@ const strictFetch = async (url, init) => {
         clearTimeout(timeoutId);
     }
 };
+
+// Set global fetch function for Neon
+neonConfig.fetchFunction = strictFetch;
 
 const NullishQueryFunction = () => {
   throw new Error(

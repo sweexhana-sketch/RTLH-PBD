@@ -105,7 +105,7 @@ const getRenderIdVisitor =
               ? (body as NodePath<t.Node>[]).findIndex((p) => p.isImportDeclaration())
               : -1;
             if (firstImport === -1) {
-              program.unshiftContainer('body', importDecl);
+              (program as any).unshiftContainer('body', importDecl);
             } else if (Array.isArray(body)) {
               (body[firstImport] as any).insertBefore(importDecl);
             }
