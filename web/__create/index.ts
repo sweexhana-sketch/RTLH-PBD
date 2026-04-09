@@ -74,13 +74,18 @@ const getDb = () => {
 
     // Universal DB Proxy with 10s timeout to protect Auth and App
     _db = async (strings: any, ...values: any[]) => {
+      let timer: any;
       const queryTimeout = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('DATABASE_TIMEOUT: Query took longer than 10s')), 10000);
+        timer = setTimeout(() => reject(new Error('DATABASE_TIMEOUT: Query took longer than 10s')), 10000);
       });
-      return Promise.race([
-        rawClient(strings, ...values),
-        queryTimeout
-      ]);
+      try {
+        return await Promise.race([
+          rawClient(strings, ...values),
+          queryTimeout
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
     };
   }
   return _db;
@@ -114,8 +119,9 @@ app.use('*', async (c, next) => {
   // Bypasses
   if (c.req.path === '/health' || c.req.path === '/favicon.ico') return next();
 
+  let timer: any;
   const timeoutPromise = new Promise((_, reject) => {
-    setTimeout(() => reject(new Error('GLOBAL_TIMEOUT: Process took longer than 15s')), 15000);
+    timer = setTimeout(() => reject(new Error('GLOBAL_TIMEOUT: Process took longer than 15s')), 15000);
   });
 
   try {
@@ -123,6 +129,8 @@ app.use('*', async (c, next) => {
   } catch (err: any) {
     log(`GLOBAL TIMEOUT/ERROR caught: ${err.message || err}`);
     return c.html(getHTMLForErrorPage(err), 500);
+  } finally {
+    clearTimeout(timer);
   }
 });
 

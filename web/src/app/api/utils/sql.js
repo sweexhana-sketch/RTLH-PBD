@@ -14,8 +14,9 @@ const neonClient = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : N
 
 const sql = async (strings, ...values) => {
   const start = Date.now();
+  let timer;
   const queryTimeout = new Promise((_, reject) => {
-    setTimeout(() => reject(new Error('DATABASE_TIMEOUT: Query took longer than 10s')), 10000);
+    timer = setTimeout(() => reject(new Error('DATABASE_TIMEOUT: Query took longer than 10s')), 10000);
   });
 
   try {
@@ -29,6 +30,8 @@ const sql = async (strings, ...values) => {
     const isTimeout = error.message?.includes('DATABASE_TIMEOUT');
     console.error(`[${new Date().toISOString()}] [DB-QUERY] ${isTimeout ? 'TIMED OUT' : 'FAILED'} after ${Date.now() - start}ms:`, error);
     throw error;
+  } finally {
+    clearTimeout(timer);
   }
 };
 
