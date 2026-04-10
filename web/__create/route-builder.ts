@@ -11,8 +11,13 @@ const api = new Hono();
 const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production' || (import.meta as any).env?.PROD;
 const API_ROOT_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '../src/app/api');
 
-if (globalThis.fetch) {
-  globalThis.fetch = updatedFetch;
+// Delay polyfill until actual execution to keep boot sterile
+let _fetchPolyfilled = false;
+function polyfillFetch() {
+  if (!_fetchPolyfilled && globalThis.fetch) {
+    globalThis.fetch = updatedFetch;
+    _fetchPolyfilled = true;
+  }
 }
 
 // Recursively find all route.js files (Development only)
@@ -65,6 +70,7 @@ function getHonoPath(routeFile: string): { name: string; pattern: string }[] {
 
 // Import and register all routes
 async function registerRoutes() {
+  polyfillFetch();
   console.log('[DEBUG] registerRoutes: Starting...');
   api.routes = [];
 

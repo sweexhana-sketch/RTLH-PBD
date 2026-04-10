@@ -1,7 +1,7 @@
 import { skipCSRFCheck } from '@auth/core';
 import Credentials from '@auth/core/providers/credentials';
 import { authHandler, initAuthConfig } from '@hono/auth-js';
-import { neon } from '@neondatabase/serverless';
+import { neon, neonConfig } from '@neondatabase/serverless';
 import bcrypt from 'bcryptjs';
 import { Hono } from 'hono';
 import { env } from 'hono/adapter';
@@ -24,6 +24,7 @@ const log = (msg: string, requestId?: string) => {
   const idPrefix = requestId ? ` [${requestId}]` : '';
   console.error(`[${new Date().toISOString()}] [DEBUG]${idPrefix} ${msg}`);
 };
+
 
 /**
  * Bulletproof environment variable access utility.
@@ -68,10 +69,9 @@ let _adapter: any = null;
 
 const getDb = () => {
   if (!_db) {
-    log('Initializing Database HTTP Client (Neon) with 10s guard...');
     const dbUrl = getStaticEnv('DATABASE_URL');
-    if (!dbUrl) log('WARNING: DATABASE_URL is missing.');
-    
+
+    // ALL configuration happens ONLY when DB is first requested
     const strictFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(new Error('DATABASE_FETCH_TIMEOUT')), 10000);
@@ -82,13 +82,13 @@ const getDb = () => {
         }
     };
     
-    // Set global fetch function for Neon to ensure all connections use our AbortController
-    // This must be set on neonConfig globally for it to be picked up by the driver.
-    neonConfig.fetchFunction = strictFetch;
+    if (neonConfig) {
+      neonConfig.fetchFunction = strictFetch;
+    }
     
     const rawClient = neon(dbUrl || '');
 
-    // Universal DB Proxy with 10s timeout to protect Auth and App
+    // Universal DB Proxy with 10s timeout
     _db = async (strings: any, ...values: any[]) => {
       let timer: any;
       const queryTimeout = new Promise((_, reject) => {
@@ -198,6 +198,7 @@ app.use('*', async (c, next) => {
   }
   await next();
 });
+
 
 app.onError((err, c) => {
   console.error('[DEBUG] Hono Error Encountered:', err);
