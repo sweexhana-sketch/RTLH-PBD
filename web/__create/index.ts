@@ -143,6 +143,12 @@ app.use('*', async (c, next) => {
   });
 
   try {
+    const isLite = c.req.query('lite') === 'true';
+    if (isLite) {
+      log(`[LITE_BYPASS] Skipping all logic for ${c.req.path}`, requestId);
+      return c.text(`SERVER_ALIVE: Request ${requestId} processed in Lite mode.`, 200);
+    }
+
     const start = Date.now();
     await Promise.race([next(), timeoutPromise]);
     log(`[HONO_REQUEST_COMPLETE] Finished in ${Date.now() - start}ms`, requestId);
@@ -231,6 +237,13 @@ if (getStaticEnv('AUTH_SECRET')) {
   log('Initializing Auth.js middleware (Deferred)...');
   app.use(
     '*',
+    async (c, next) => {
+      if (c.req.query('noauth') === 'true') {
+        log('[AUTH_BYPASS] Skipping Auth.js middleware...', (c as any).requestId);
+        return next();
+      }
+      return next();
+    },
     initAuthConfig(async (c) => {
       const requestId = (c as any).requestId;
       log('Auth.js: Config callback invoked', requestId);

@@ -453,6 +453,9 @@ export function Layout({ children }: { children: ReactNode }) {
 }
 
 export default function App() {
+  if (import.meta.env.SSR) {
+    console.error(`[${new Date().toISOString()}] [DEBUG] [SSR_RENDER_START] React App rendering started.`);
+  }
   return (
     <SessionProvider>
       <Outlet />
