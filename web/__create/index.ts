@@ -2,7 +2,7 @@ import { skipCSRFCheck } from '@auth/core';
 import Credentials from '@auth/core/providers/credentials';
 import { authHandler, initAuthConfig } from '@hono/auth-js';
 import { neon, neonConfig } from '@neondatabase/serverless';
-import bcrypt from 'bcryptjs';
+// bcryptjs removed - will be dynamically imported
 import { Hono } from 'hono';
 import { env } from 'hono/adapter';
 import { cors } from 'hono/cors';
@@ -16,9 +16,7 @@ import { getHTMLForErrorPage } from './get-html-for-error-page';
 import { isAuthAction } from './is-auth-action';
 import { API_BASENAME, api, ensureRoutesRegistered } from './route-builder';
 
-// @ts-expect-error - virtual module
-import * as serverBuild from 'virtual:react-router/server-build';
-import { createRequestHandler } from 'react-router';
+// serverBuild and createRequestHandler removed - will be lazy-loaded
 
 const log = (msg: string, requestId?: string) => {
   const idPrefix = requestId ? ` [${requestId}]` : '';
@@ -330,7 +328,7 @@ if (getStaticEnv('AUTH_SECRET')) {
                 return null;
               }
 
-              const { default: bcryptInstance } = await import('bcryptjs');
+              const bcryptInstance = await import('bcryptjs');
               const isValid = await bcryptInstance.compare(password, accountPassword);
               if (!isValid) {
                 log(`Auth.js [Signin]: Invalid password for ${email}`, requestId);
@@ -363,7 +361,7 @@ if (getStaticEnv('AUTH_SECRET')) {
                 return null;
               }
 
-              const { default: bcryptInstance } = await import('bcryptjs');
+              const bcryptInstance = await import('bcryptjs');
               const newUser = await adapter.createUser({
                 emailVerified: null,
                 email,
@@ -445,10 +443,18 @@ if (!isProd) {
     const requestId = Math.random().toString(36).substring(7);
 
     if (!cachedRequestHandler) {
-      log(`[${requestId}] Lazy initializing React Router request handler...`);
+      log(`[${requestId}] ATOMIC_BOOT: Lazy loading React Router and server build...`);
       const start = Date.now();
-      cachedRequestHandler = createRequestHandler(serverBuild, 'production');
-      log(`[${requestId}] React Router request handler created in ${Date.now() - start}ms.`);
+      
+      // DYNAMIC IMPORTS: This is the key to solving 60s cold starts.
+      // We load the 60MB+ of components ONLY when needed.
+      const [{ createRequestHandler: createHandler }, serverBuild] = await Promise.all([
+        import('react-router'),
+        import('virtual:react-router/server-build')
+      ]);
+      
+      cachedRequestHandler = createHandler(serverBuild, 'production');
+      log(`[${requestId}] ATOMIC_BOOT: React Router initialized in ${Date.now() - start}ms.`);
     }
 
     // Fix for "Invalid URL" error: Ensure incoming request has an absolute URL

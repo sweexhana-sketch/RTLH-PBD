@@ -1,5 +1,8 @@
 import { handle } from 'hono/vercel';
+console.error(`[${new Date().toISOString()}] [API-BOOT] Starting bundle evaluation...`);
+const bootStart = Date.now();
 import { app } from '../build/server/index.js';
+console.error(`[${new Date().toISOString()}] [API-BOOT] Bundle evaluation completed in ${Date.now() - bootStart}ms.`);
 
 export const config = { runtime: 'nodejs' };
 
