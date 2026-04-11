@@ -1,4 +1,11 @@
-const originalFetch = fetch;
+// originalFetch captured lazily to prevent module-level hang in Node.js serverless
+let _originalFetch: typeof fetch | null = null;
+const getOriginalFetch = () => {
+  if (!_originalFetch) {
+    _originalFetch = (globalThis as any).fetch || fetch;
+  }
+  return _originalFetch;
+};
 const isBackend = () => typeof window === 'undefined';
 
 const safeStringify = (value: unknown) =>
@@ -89,6 +96,7 @@ export const fetchWithHeaders = async (
   try {
     // we should not add headers to requests that don't go to our own server
     // or if it's an API request, or if it's a Neon DB query
+    const originalFetch = getOriginalFetch();
     if (isExternalFetch || url.startsWith('/api') || isNeonQuery) {
       return await originalFetch(input, init);
     }
@@ -129,6 +137,7 @@ export const fetchWithHeaders = async (
         : ''
       : '';
 
+    const originalFetch = getOriginalFetch();
     const result = await originalFetch(`${prefix}${url}`, finalInit);
     if (!result.ok) {
       postToParent(
