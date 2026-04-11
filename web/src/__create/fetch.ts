@@ -137,7 +137,6 @@ export const fetchWithHeaders = async (
         : ''
       : '';
 
-    const originalFetch = getOriginalFetch();
     const result = await originalFetch(`${prefix}${url}`, finalInit);
     if (!result.ok) {
       postToParent(
