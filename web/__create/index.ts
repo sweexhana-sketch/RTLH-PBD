@@ -8,10 +8,10 @@ import { env } from 'hono/adapter';
 import { cors } from 'hono/cors';
 import { proxy } from 'hono/proxy';
 import { bodyLimit } from 'hono/body-limit';
-import { createHonoServer } from 'react-router-hono-server/node';
+// createHonoServer removed - will be dynamically imported for dev mode
 import { serializeError } from 'serialize-error';
 // import ws from 'ws'; // Disabled for HTTP driver
-import NeonAdapter from './adapter';
+// NeonAdapter removed - will be dynamically imported
 import { getHTMLForErrorPage } from './get-html-for-error-page';
 import { isAuthAction } from './is-auth-action';
 import { API_BASENAME, api, ensureRoutesRegistered } from './route-builder';
@@ -105,9 +105,10 @@ const getDb = () => {
   return _db;
 };
 
-const getAdapter = () => {
+const getAdapter = async () => {
   if (!_adapter) {
-    _adapter = NeonAdapter(getDb());
+    const { default: Adapter } = await import('./adapter');
+    _adapter = Adapter(getDb());
   }
   return _adapter;
 };
@@ -254,7 +255,7 @@ if (getStaticEnv('AUTH_SECRET')) {
 
       const db = getDb();
       log('Auth.js: Registering adapter...', requestId);
-      const adapter = NeonAdapter(db);
+      const adapter = await getAdapter();
 
       return {
         secret: secret || getStaticEnv('AUTH_SECRET') || 'dummy-secret-to-prevent-crash',
@@ -432,6 +433,7 @@ let cachedRequestHandler: any = null;
 
 if (!isProd) {
   log('Starting in Development mode...');
+  const { createHonoServer } = await import('react-router-hono-server/node');
   server = await createHonoServer({
     app,
     defaultLogger: false,
