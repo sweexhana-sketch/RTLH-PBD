@@ -1,58 +1,80 @@
 export const config = { runtime: 'nodejs' };
 
 let cachedHandler = null;
+let bootError = null;
 
 export default async (req, res) => {
   const url = req.url || '/';
   const invocationId = Math.random().toString(36).substring(7);
+  const startTime = Date.now();
   
-  // 1. ULTRA-FAST BYPASS (Raw Node.js Logic)
-  // This ensures these routes respond in <10ms even on a cold start
-  // because no Hono or App code is loaded yet.
-  if (url === '/favicon.ico' || url.includes('favicon')) {
+  // STAGE 1: Ultra-fast static asset bypass (raw Node.js, zero imports)
+  if (url === '/favicon.ico' || url === '/favicon.png' || url.startsWith('/favicon')) {
     res.statusCode = 404;
     res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
     res.end('Not Found');
     return;
   }
   
-  if (url === '/health') {
+  if (url === '/health' || url === '/ping') {
     res.statusCode = 200;
-    res.setHeader('Content-Type', 'text/plain');
-    res.end('OK');
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ status: 'ok', ts: Date.now() }));
     return;
   }
 
-  // 2. LAZY LOAD MACHINERY (Hono + App)
+  // Report a previous critical boot error so we can see it in logs
+  if (bootError) {
+    console.error(`[${new Date().toISOString()}] [API-ENTRY] [${invocationId}] Reusing cached BOOT ERROR: ${bootError}`);
+    res.statusCode = 503;
+    res.setHeader('Content-Type', 'text/html');
+    res.end(`<h1>Application Boot Failed</h1><pre>${bootError}</pre>`);
+    return;
+  }
+
+  // STAGE 2: Lazy-load the Hono machinery on first real request
   if (!cachedHandler) {
     const bootStart = Date.now();
-    console.error(`[${new Date().toISOString()}] [API-BOOT] [${invocationId}] [v10] Lazy loading machinery...`);
+    console.error(`[${new Date().toISOString()}] [API-BOOT] [${invocationId}] Starting lazy machinery load...`);
     
     try {
-      // DYNAMIC DEFERRAL: This is the key to solving 60s cold starts.
-      // We load the heavy server bundle ONLY when a real request arrives.
-      const [{ handle }, { app }] = await Promise.all([
-        import('hono/vercel'),
-        import('../build/server/index.js')
-      ]);
+      // Load hono adapter first (lightweight)
+      const { handle } = await import('hono/vercel');
+      console.error(`[${new Date().toISOString()}] [API-BOOT] [${invocationId}] hono/vercel loaded in ${Date.now() - bootStart}ms`);
+
+      // Load the app bundle (this is the heavy one - will take 1-3s on cold start)
+      const appModule = await import('../build/server/index.js');
+      const { app } = appModule;
+      console.error(`[${new Date().toISOString()}] [API-BOOT] [${invocationId}] server bundle loaded in ${Date.now() - bootStart}ms`);
+      
+      if (!app) {
+        throw new Error('server bundle exported no "app" instance');
+      }
       
       cachedHandler = handle(app);
-      console.error(`[${new Date().toISOString()}] [API-BOOT] [${invocationId}] [v10] Machinery loaded in ${Date.now() - bootStart}ms.`);
+      console.error(`[${new Date().toISOString()}] [API-BOOT] [${invocationId}] Handler ready. Total boot: ${Date.now() - bootStart}ms`);
     } catch (err) {
-      console.error(`[${new Date().toISOString()}] [API-BOOT] [${invocationId}] [v10] CRITICAL LOAD FAILURE:`, err);
-      res.statusCode = 500;
-      res.setHeader('Content-Type', 'text/plain');
-      res.end('Internal Server Error: Application failed to boot.');
+      bootError = err?.message || String(err);
+      console.error(`[${new Date().toISOString()}] [API-BOOT] [${invocationId}] CRITICAL BOOT FAILURE (${Date.now() - bootStart}ms):`, err);
+      res.statusCode = 503;
+      res.setHeader('Content-Type', 'text/html');
+      res.end(`<h1>Application Boot Failed</h1><pre>${bootError}</pre>`);
       return;
     }
   }
 
-  // 3. EXECUTE HONO HANDLER
+  // STAGE 3: Execute Hono handler
   try {
+    console.error(`[${new Date().toISOString()}] [API-ENTRY] [${invocationId}] Delegating ${req.method} ${url}`);
     return await cachedHandler(req, res);
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] [API-ERROR] [${invocationId}] Handler execution failed:`, err);
-    res.statusCode = 500;
-    res.end('Internal Server Error');
+    const errMsg = err?.message || String(err);
+    console.error(`[${new Date().toISOString()}] [API-ERROR] [${invocationId}] Handler failed (${Date.now() - startTime}ms): ${errMsg}`);
+    if (!res.headersSent) {
+      res.statusCode = 500;
+      res.setHeader('Content-Type', 'text/html');
+      res.end(`<h1>500 Internal Server Error</h1><pre>${errMsg}</pre>`);
+    }
   }
 };

@@ -428,16 +428,20 @@ app.use(API_BASENAME + '/*', async (c, next) => {
 app.route(API_BASENAME, api);
 log('API router attached.');
 
-let server;
+let server: any;
 let cachedRequestHandler: any = null;
 
 if (!isProd) {
-  log('Starting in Development mode...');
-  const { createHonoServer } = await import('react-router-hono-server/node');
-  server = await createHonoServer({
-    app,
-    defaultLogger: false,
-  });
+  // Dev mode: createHonoServer needs top-level await but this only runs locally
+  // We use a self-calling async function to prevent blocking the prod export path
+  (async () => {
+    log('Starting in Development mode...');
+    const { createHonoServer } = await import('react-router-hono-server/node');
+    server = await createHonoServer({
+      app,
+      defaultLogger: false,
+    });
+  })();
 } else {
   log('Starting in Production mode (READY for requests)');
   
@@ -449,9 +453,10 @@ if (!isProd) {
       const start = Date.now();
       
       // DYNAMIC IMPORTS: This is the key to solving 60s cold starts.
-      // We load the 60MB+ of components ONLY when needed.
+      // We load the components ONLY when needed.
       const [{ createRequestHandler: createHandler }, serverBuild] = await Promise.all([
         import('react-router'),
+        // @ts-expect-error - virtual module
         import('virtual:react-router/server-build')
       ]);
       
@@ -474,23 +479,19 @@ if (!isProd) {
     log(`[${requestId}] Leaving React Router handler after ${Date.now() - requestStart}ms.`);
 
     // --- VERCEL 504 HANG WORKAROUND ---
-    // Vercel's Node.js runtime has a known issue where piping Web Streams from React Router 
-    // can result in lost 'end' events, causing the Lambda to hang for 60s and throw a 504.
-    // By buffering the HTML stream into a synchronous string, we completely bypass the streaming proxy bug.
+    // Buffer the HTML stream to avoid losing 'end' events in Vercel's Node.js runtime.
     if (response.body && response.headers.get('Content-Type')?.includes('text/html')) {
         log(`[${requestId}] Buffering HTML response stream...`);
         try {
-            // Buffer with an 8-second timeout to strictly prevent 60s Vercel 504s
             const bodyText = await Promise.race([
                 response.text(),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('HTML Stream Buffering timed out after 8s')), 8000))
             ]) as string;
             
-            // Create new headers, stripping chunked encoding if present
             const newHeaders = new Headers(response.headers);
             newHeaders.delete('transfer-encoding');
             
-            log(`[${requestId}] Stream buffered successfully. Sending response.`);
+            log(`[${requestId}] Stream buffered. Sending response.`);
             return new Response(bodyText, {
                 status: response.status,
                 statusText: response.statusText,
@@ -498,7 +499,7 @@ if (!isProd) {
             });
         } catch (streamErr) {
             log(`[${requestId}] ERROR buffering stream: ${streamErr}`);
-            return new Response('<h1>500 Internal Server Error</h1><p>Rendering timed out. Stream did not close.</p>', { 
+            return new Response('<h1>500 Internal Server Error</h1><p>Rendering timed out.</p>', { 
                 status: 500, 
                 headers: { 'Content-Type': 'text/html' } 
             });
