@@ -1,6 +1,5 @@
-import { skipCSRFCheck } from '@auth/core';
-import Credentials from '@auth/core/providers/credentials';
-import { authHandler, initAuthConfig } from '@hono/auth-js';
+// @auth/core, @auth/core/providers/credentials, @hono/auth-js removed
+// They will be dynamically imported to prevent blocking module evaluation
 import { neon, neonConfig } from '@neondatabase/serverless';
 // bcryptjs removed - will be dynamically imported
 import { Hono } from 'hono';
@@ -233,172 +232,142 @@ for (const method of ['post', 'put', 'patch'] as const) {
   );
 }
 
-if (getStaticEnv('AUTH_SECRET')) {
-  log('Initializing Auth.js middleware (Deferred)...');
-  app.use(
-    '*',
-    async (c, next) => {
-      if (c.req.query('noauth') === 'true') {
-        log('[AUTH_BYPASS] Skipping Auth.js middleware...', (c as any).requestId);
-        return next();
-      }
-      return next();
-    },
-    initAuthConfig(async (c) => {
-      const requestId = (c as any).requestId;
-      log('Auth.js: Config callback invoked', requestId);
+// Auth lazy state - loaded only on first auth-requiring request
+let _lazyAuthMiddleware: any = null;
+let _authLibs: any = null;
 
-      const secret = getSafeEnv(c, 'AUTH_SECRET');
-      if (!secret) {
-        log('WARNING: AUTH_SECRET resolve failed in callback. Using static fallback if available.', requestId);
-      }
-
-      const db = getDb();
-      log('Auth.js: Registering adapter...', requestId);
-      const adapter = await getAdapter();
-
-      return {
-        secret: secret || getStaticEnv('AUTH_SECRET') || 'dummy-secret-to-prevent-crash',
-        adapter,
-        pages: {
-          signIn: '/account/signin',
-          signOut: '/account/logout',
-        },
-        skipCSRFCheck,
-        session: {
-          strategy: 'jwt',
-          maxAge: 30 * 24 * 60 * 60,
-        },
-        callbacks: {
-          async session({ session, token }: any) {
-            if (token?.sub) session.user.id = token.sub;
-            return session;
-          },
-          async jwt({ token, user }: any) {
-            if (user) token.id = user.id;
-            return token;
-          },
-        },
-        cookies: {
-          csrfToken: {
-            options: {
-              secure: true,
-              sameSite: 'none',
-            },
-          },
-          sessionToken: {
-            options: {
-              secure: true,
-              sameSite: 'none',
-            },
-          },
-          callbackUrl: {
-            options: {
-              secure: true,
-              sameSite: 'none',
-            },
-          },
-        },
-        providers: [
-          Credentials({
-            id: 'credentials-signin',
-            name: 'Credentials Sign in',
-            credentials: {
-              email: { label: 'Email', type: 'email' },
-              password: { label: 'Password', type: 'password' },
-            },
-            authorize: async (credentials) => {
-              const { email, password } = credentials;
-              if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
-                return null;
-              }
-
-              log(`Auth.js [Signin]: Authorizing ${email}...`, requestId);
-              const userByEmail = await adapter.getUserByEmail(email);
-              if (!userByEmail) {
-                log(`Auth.js [Signin]: User not found: ${email}`, requestId);
-                return null;
-              }
-
-              const matchingAccount = userByEmail.accounts.find(
-                (account: any) => account.provider === 'credentials'
-              );
-              const accountPassword = matchingAccount?.password;
-              if (!accountPassword) {
-                log(`Auth.js [Signin]: No credential account for ${email}`, requestId);
-                return null;
-              }
-
-              const bcryptInstance = await import('bcryptjs');
-              const isValid = await bcryptInstance.compare(password, accountPassword);
-              if (!isValid) {
-                log(`Auth.js [Signin]: Invalid password for ${email}`, requestId);
-                return null;
-              }
-
-              log(`Auth.js [Signin]: Success for ${email}`, requestId);
-              return userByEmail;
-            },
-          }),
-          Credentials({
-            id: 'credentials-signup',
-            name: 'Credentials Sign up',
-            credentials: {
-              email: { label: 'Email', type: 'email' },
-              password: { label: 'Password', type: 'password' },
-              name: { label: 'Name', type: 'text' },
-              image: { label: 'Image', type: 'text', required: false },
-            },
-            authorize: async (credentials) => {
-              const { email, password, name, image } = credentials;
-              if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
-                return null;
-              }
-
-              log(`Auth.js [Signup]: Attempting signup for ${email}...`, requestId);
-              const existingUser = await adapter.getUserByEmail(email);
-              if (existingUser) {
-                log(`Auth.js [Signup]: User already exists: ${email}`, requestId);
-                return null;
-              }
-
-              const bcryptInstance = await import('bcryptjs');
-              const newUser = await adapter.createUser({
-                emailVerified: null,
-                email,
-                name: typeof name === 'string' && name.length > 0 ? name : undefined,
-                image: typeof image === 'string' && image.length > 0 ? image : undefined,
-              });
-
-              await adapter.linkAccount({
-                extraData: {
-                  password: await bcryptInstance.hash(password, 10),
-                },
-                type: 'credentials',
-                userId: newUser.id,
-                provider: 'credentials',
-                providerAccountId: newUser.id,
-              });
-
-              log(`Auth.js [Signup]: Success for ${email}`, requestId);
-              return newUser;
-            },
-          }),
-        ],
-      };
-    })
-  );
-  log('Auth.js middleware attached.');
+async function getAuthLibs() {
+  if (!_authLibs) {
+    log('Auth.js: Lazy loading auth libraries (first auth request)...');
+    const [authCore, credMod, authJs] = await Promise.all([
+      import('@auth/core'),
+      import('@auth/core/providers/credentials'),
+      import('@hono/auth-js'),
+    ]);
+    _authLibs = {
+      skipCSRFCheck: authCore.skipCSRFCheck,
+      Credentials: credMod.default,
+      initAuthConfig: authJs.initAuthConfig,
+      authHandler: authJs.authHandler,
+    };
+    log('Auth.js: Auth libraries loaded successfully.');
+  }
+  return _authLibs;
 }
+
+if (getStaticEnv('AUTH_SECRET')) {
+  // FULLY LAZY AUTH MIDDLEWARE - loads @auth/core and @hono/auth-js only on first real request
+  app.use('*', async (c, next) => {
+    if (c.req.query('noauth') === 'true') {
+      log('[AUTH_BYPASS] Skipping Auth.js middleware...', (c as any).requestId);
+      return next();
+    }
+
+    if (!_lazyAuthMiddleware) {
+      const requestId = (c as any).requestId;
+      const { skipCSRFCheck, Credentials, initAuthConfig } = await getAuthLibs();
+
+      _lazyAuthMiddleware = initAuthConfig(async (c) => {
+        const requestId = (c as any).requestId;
+        log('Auth.js: Config callback invoked', requestId);
+        const secret = getSafeEnv(c, 'AUTH_SECRET');
+        const adapter = await getAdapter();
+
+        return {
+          secret: secret || getStaticEnv('AUTH_SECRET') || 'dummy-secret-to-prevent-crash',
+          adapter,
+          pages: { signIn: '/account/signin', signOut: '/account/logout' },
+          skipCSRFCheck,
+          session: { strategy: 'jwt', maxAge: 30 * 24 * 60 * 60 },
+          callbacks: {
+            async session({ session, token }: any) {
+              if (token?.sub) session.user.id = token.sub;
+              return session;
+            },
+            async jwt({ token, user }: any) {
+              if (user) token.id = user.id;
+              return token;
+            },
+          },
+          cookies: {
+            csrfToken: { options: { secure: true, sameSite: 'none' } },
+            sessionToken: { options: { secure: true, sameSite: 'none' } },
+            callbackUrl: { options: { secure: true, sameSite: 'none' } },
+          },
+          providers: [
+            Credentials({
+              id: 'credentials-signin',
+              name: 'Credentials Sign in',
+              credentials: {
+                email: { label: 'Email', type: 'email' },
+                password: { label: 'Password', type: 'password' },
+              },
+              authorize: async (credentials) => {
+                const { email, password } = credentials;
+                if (!email || !password || typeof email !== 'string' || typeof password !== 'string') return null;
+                log(`Auth.js [Signin]: Authorizing ${email}...`, requestId);
+                const a = await getAdapter();
+                const userByEmail = await a.getUserByEmail(email);
+                if (!userByEmail) return null;
+                const matchingAccount = userByEmail.accounts.find((acc: any) => acc.provider === 'credentials');
+                if (!matchingAccount?.password) return null;
+                const bcrypt = await import('bcryptjs');
+                const bcryptFn = (bcrypt as any).default || bcrypt;
+                const isValid = await bcryptFn.compare(password, matchingAccount.password);
+                if (!isValid) return null;
+                log(`Auth.js [Signin]: Success for ${email}`, requestId);
+                return userByEmail;
+              },
+            }),
+            Credentials({
+              id: 'credentials-signup',
+              name: 'Credentials Sign up',
+              credentials: {
+                email: { label: 'Email', type: 'email' },
+                password: { label: 'Password', type: 'password' },
+                name: { label: 'Name', type: 'text' },
+                image: { label: 'Image', type: 'text', required: false },
+              },
+              authorize: async (credentials) => {
+                const { email, password, name, image } = credentials;
+                if (!email || !password || typeof email !== 'string' || typeof password !== 'string') return null;
+                log(`Auth.js [Signup]: Attempting signup for ${email}...`, requestId);
+                const a = await getAdapter();
+                const existingUser = await a.getUserByEmail(email);
+                if (existingUser) return null;
+                const bcrypt = await import('bcryptjs');
+                const bcryptFn = (bcrypt as any).default || bcrypt;
+                const newUser = await a.createUser({
+                  emailVerified: null, email,
+                  name: typeof name === 'string' && name.length > 0 ? name : undefined,
+                  image: typeof image === 'string' && image.length > 0 ? image : undefined,
+                });
+                await a.linkAccount({
+                  extraData: { password: await bcryptFn.hash(password, 10) },
+                  type: 'credentials', userId: newUser.id,
+                  provider: 'credentials', providerAccountId: newUser.id,
+                });
+                log(`Auth.js [Signup]: Success for ${email}`, requestId);
+                return newUser;
+              },
+            }),
+          ],
+        };
+      });
+      log('Auth.js: Lazy middleware initialized.', requestId);
+    }
+    return _lazyAuthMiddleware(c, next);
+  });
+  log('Auth.js lazy gate attached.');
+}
+
 app.all('/integrations/:path{.+}', async (c, next) => {
   const queryParams = c.req.query();
   const url = `${process.env.NEXT_PUBLIC_CREATE_BASE_URL ?? 'https://www.create.xyz'}/integrations/${c.req.param('path')}${Object.keys(queryParams).length > 0 ? `?${new URLSearchParams(queryParams).toString()}` : ''}`;
-
   return proxy(url, {
     method: c.req.method,
     body: c.req.raw.body ?? null,
-    // @ts-expect-error -- duplex is accepted by the runtime even though the
-    // type declarations don't include it; required for streaming integrations
+    // @ts-expect-error -- duplex is accepted by the runtime
     duplex: 'half',
     redirect: 'manual',
     headers: {
@@ -413,6 +382,7 @@ app.all('/integrations/:path{.+}', async (c, next) => {
 
 app.use('/api/auth/*', async (c, next) => {
   if (isAuthAction(c.req.path)) {
+    const { authHandler } = await getAuthLibs();
     return authHandler()(c, next);
   }
   return next();
